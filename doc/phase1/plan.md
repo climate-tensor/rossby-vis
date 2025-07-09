@@ -484,4 +484,4 @@ rossby-vis/
 
 ## License
 
-See [LICENSE](../LICENSE) file for details.
+See [LICENSE](../../LICENSE) file for details.

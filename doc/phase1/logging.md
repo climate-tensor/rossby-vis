@@ -287,7 +287,7 @@ OPTIONS:
 ```dockerfile
 FROM rust:1.70-alpine AS builder
 WORKDIR /app
-COPY . .
+COPY .. .
 RUN cargo build --release
 
 FROM alpine:latest

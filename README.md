@@ -196,8 +196,8 @@ cargo build --release
 
 ## Documentation
 
-- [`doc/design.md`](doc/design.md): Complete system architecture and technical design
-- [`doc/plan.md`](doc/plan.md): Comprehensive project documentation and development guidelines
+- [`doc/design.md`](doc/phase1/design.md): Complete system architecture and technical design
+- [`doc/plan.md`](doc/phase1/plan.md): Comprehensive project documentation and development guidelines
 - [`AGENT.md`](AGENT.md): Development protocols and quality standards
 
 ## License
