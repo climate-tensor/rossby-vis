@@ -164,7 +164,7 @@
         }, MOVE_END_WAIT);  // wait for a bit to decide if user has stopped moving the globe
 
         d3.select("#display").call(zoom);
-        d3.select("#show-location").on("click", function() {
+        d3.select("#show-probe").on("click", function() {
             if (navigator.geolocation) {
                 report.status("Finding current position...");
                 navigator.geolocation.getCurrentPosition(function(pos) {
@@ -339,25 +339,25 @@
         var lakes = d3.select(".lakes");
         d3.selectAll("path").attr("d", path);  // do an initial draw -- fixes issue with safari
 
-        function drawLocationMark(point, coord) {
-            // show the location on the map if defined
+        function drawProbeMark(point, coord) {
+            // show the probe on the map if defined
             if (fieldAgent.value() && !fieldAgent.value().isInsideBoundary(point[0], point[1])) {
                 // UNDONE: Sometimes this is invoked on an old, released field, because new one has not been
                 //         built yet, causing the mark to not get drawn.
                 return;  // outside the field boundary, so ignore.
             }
             if (coord && _.isFinite(coord[0]) && _.isFinite(coord[1])) {
-                var mark = d3.select(".location-mark");
+                var mark = d3.select(".probe-mark");
                 if (!mark.node()) {
-                    mark = d3.select("#foreground").append("path").attr("class", "location-mark");
+                    mark = d3.select("#foreground").append("path").attr("class", "probe-mark");
                 }
                 mark.datum({type: "Point", coordinates: coord}).attr("d", path);
             }
         }
 
-        // Draw the location mark if one is currently visible.
+        // Draw the probe mark if one is currently visible.
         if (activeLocation.point && activeLocation.coord) {
-            drawLocationMark(activeLocation.point, activeLocation.coord);
+            drawProbeMark(activeLocation.point, activeLocation.coord);
         }
 
         // Throttled draw method helps with slow devices that would get overwhelmed by too many redraw events.
@@ -387,7 +387,7 @@
                     d3.selectAll("path").attr("d", path);
                     rendererAgent.trigger("render");
                 },
-                click: drawLocationMark
+                click: drawProbeMark
             });
 
         // Finally, inject the globe model into the input controller. Do it on the next event turn to ensure
@@ -723,7 +723,7 @@
                 var x = d3.mouse(this)[0];
                 var pct = µ.clamp((Math.round(x) - 2) / (n - 2), 0, 1);
                 var value = µ.spread(pct, bounds[0], bounds[1]);
-                var elementId = grid.type === "wind" ? "#location-wind-units" : "#location-value-units";
+                var elementId = grid.type === "wind" ? "#probe-wind-units" : "#probe-value-units";
                 var units = createUnitToggle(elementId, grid).value();
                 colorBar.attr("title", µ.formatScalar(value, units) + " " + units.label);
             });
@@ -789,24 +789,24 @@
     /**
      * Display the specified wind value. Allow toggling between the different types of wind units.
      */
-    function showWindAtLocation(wind, product) {
-        var unitToggle = createUnitToggle("#location-wind-units", product), units = unitToggle.value();
-        d3.select("#location-wind").text(µ.formatVector(wind, units));
-        d3.select("#location-wind-units").text(units.label).on("click", function() {
+    function showWindAtProbe(wind, product) {
+        var unitToggle = createUnitToggle("#probe-wind-units", product), units = unitToggle.value();
+        d3.select("#probe-wind").text(µ.formatVector(wind, units));
+        d3.select("#probe-wind-units").text(units.label).on("click", function() {
             unitToggle.next();
-            showWindAtLocation(wind, product);
+            showWindAtProbe(wind, product);
         });
     }
 
     /**
      * Display the specified overlay value. Allow toggling between the different types of supported units.
      */
-    function showOverlayValueAtLocation(value, product) {
-        var unitToggle = createUnitToggle("#location-value-units", product), units = unitToggle.value();
-        d3.select("#location-value").text(µ.formatScalar(value, units));
-        d3.select("#location-value-units").text(units.label).on("click", function() {
+    function showOverlayValueAtProbe(value, product) {
+        var unitToggle = createUnitToggle("#probe-value-units", product), units = unitToggle.value();
+        d3.select("#probe-value").text(µ.formatScalar(value, units));
+        d3.select("#probe-value-units").text(units.label).on("click", function() {
             unitToggle.next();
-            showOverlayValueAtLocation(value, product);
+            showOverlayValueAtProbe(value, product);
         });
     }
 
@@ -819,7 +819,7 @@
      * The location may not be valid, in which case no callout is displayed. Display location data for both
      * the primary grid and overlay grid, performing interpolation when necessary.
      */
-    function showLocationDetails(point, coord) {
+    function showProbeDetails(point, coord) {
         point = point || [];
         coord = coord || [];
         var grids = gridAgent.value(), field = fieldAgent.value(), λ = coord[0], φ = coord[1];
@@ -827,42 +827,42 @@
             return;
         }
 
-        clearLocationDetails(false);  // clean the slate
+        clearProbeDetails(false);  // clean the slate
         activeLocation = {point: point, coord: coord};  // remember where the current location is
 
         if (_.isFinite(λ) && _.isFinite(φ)) {
-            d3.select("#location-coord").text(µ.formatCoordinates(λ, φ));
-            d3.select("#location-close").classed("invisible", false);
+            d3.select("#probe-coord").text(µ.formatCoordinates(λ, φ));
+            d3.select("#probe-close").classed("invisible", false);
         }
 
         if (field.isDefined(point[0], point[1]) && grids) {
             var wind = grids.primaryGrid.interpolate(λ, φ);
             if (µ.isValue(wind)) {
-                showWindAtLocation(wind, grids.primaryGrid);
+                showWindAtProbe(wind, grids.primaryGrid);
             }
             if (grids.overlayGrid !== grids.primaryGrid) {
                 var value = grids.overlayGrid.interpolate(λ, φ);
                 if (µ.isValue(value)) {
-                    showOverlayValueAtLocation(value, grids.overlayGrid);
+                    showOverlayValueAtProbe(value, grids.overlayGrid);
                 }
             }
         }
     }
 
-    function updateLocationDetails() {
-        showLocationDetails(activeLocation.point, activeLocation.coord);
+    function updateProbeDetails() {
+        showProbeDetails(activeLocation.point, activeLocation.coord);
     }
 
-    function clearLocationDetails(clearEverything) {
-        d3.select("#location-coord").text("");
-        d3.select("#location-close").classed("invisible", true);
-        d3.select("#location-wind").text("");
-        d3.select("#location-wind-units").text("");
-        d3.select("#location-value").text("");
-        d3.select("#location-value-units").text("");
+    function clearProbeDetails(clearEverything) {
+        d3.select("#probe-coord").text("");
+        d3.select("#probe-close").classed("invisible", true);
+        d3.select("#probe-wind").text("");
+        d3.select("#probe-wind-units").text("");
+        d3.select("#probe-value").text("");
+        d3.select("#probe-value-units").text("");
         if (clearEverything) {
             activeLocation = {};
-            d3.select(".location-mark").remove();
+            d3.select(".probe-mark").remove();
         }
     }
 
@@ -1030,9 +1030,9 @@
         });
 
         // Add event handlers for showing, updating, and removing location details.
-        inputController.on("click", showLocationDetails);
-        fieldAgent.on("update", updateLocationDetails);
-        d3.select("#location-close").on("click", _.partial(clearLocationDetails, true));
+        inputController.on("click", showProbeDetails);
+        fieldAgent.on("update", updateProbeDetails);
+        d3.select("#probe-close").on("click", _.partial(clearProbeDetails, true));
 
         // Modify menu depending on what mode we're in.
         configuration.on("change:param", function(context, mode) {
