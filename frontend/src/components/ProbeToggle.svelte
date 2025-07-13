@@ -1,4 +1,7 @@
-<script>
+<script lang="ts">
+    import Icon from './Icon.svelte';
 </script>
 
-<span class="text-button" id="show-probe"><img src="../assets/user-pin.svg" alt="toggle data probe"/></span>
+<button class="text-button" id="option-show-grid" aria-label="Toggle grid display">
+    <Icon name="mdi:pin" />
+</button>

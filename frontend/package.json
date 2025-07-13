@@ -31,6 +31,7 @@
     "clsx": "^2.1.1",
     "inputmask": "^5.0.9",
     "mode-watcher": "^0.5.1",
+    "modern-normalize": "^3.0.1",
     "runed": "^0.28.0",
     "svelte-sonner": "^0.3.28",
     "svelte-tel-input": "^3.6.0",
@@ -41,6 +42,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.28.0",
+    "@iconify-json/mdi": "^1.2.3",
     "@iconify-json/ri": "^1.2.5",
     "@sveltejs/adapter-cloudflare": "^4.9.0",
     "@sveltejs/enhanced-img": "^0.6.0",

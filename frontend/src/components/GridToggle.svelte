@@ -1,4 +1,7 @@
-<script>
+<script lang="ts">
+    import Icon from './Icon.svelte';
 </script>
 
-<span class="text-button" id="option-show-grid"><img src="/icons/grid-4x4.svg" alt="toggle grid"/></span>
+<button class="text-button" id="option-show-grid" aria-label="Toggle grid display">
+    <Icon name="mdi:grid" />
+</button>
