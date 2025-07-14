@@ -7,7 +7,7 @@
 /* 2. 定义全局的 CSS 变量 (Design Tokens) */
 :root {
   /* 颜色 */
-  --color-background: #0F172A; /* 深蓝背景 */
+  --color-background: #000000; /* 深蓝背景 */
   --color-text-primary: #E2E8F0;   /* 主要文字颜色 */
   --color-text-secondary: #94A3B8; /* 次要文字颜色 */
   --color-accent: #38BDF8;       /* 强调色，如高亮和链接 */
