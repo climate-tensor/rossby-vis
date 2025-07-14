@@ -2,11 +2,20 @@
     export let label: string;
 </script>
 
-<span class="label">{label}</span>
-<div class="control">
-    <slot /> </div>
+<div class="row">
+    <span class="label">{label}</span>
+    <div class="control"><slot /></div>
+</div>
 
 <style>
+    .row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 0.5em;
+        padding: 0.5em 0;
+    }
+
     .label {
         justify-self: end;
         font-size: 0.9em;

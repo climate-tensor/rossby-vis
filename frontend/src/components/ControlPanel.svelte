@@ -36,9 +36,11 @@
     </p>
 
     <div id="menu"  class="control-panel-grid invisible">
-        <div style="text-align: right;">
-            <ModeToggle bind:value={mode} /> <ProbeToggle /> <GridToggle />
-        </div>
+        <ControlRow label="Controls">
+            <ProbeToggle />
+            <GridToggle />
+            <ModeToggle bind:value={mode} />
+        </ControlRow>
 
         <ControlRow label="Data">
             <InfoDisplay text={dataLayer} />
@@ -48,15 +50,31 @@
             <InfoDisplay text={dataSource} />
         </ControlRow>
 
-        <ControlRow label="Base Variable">
+        <ControlRow label="Base">
             <select>
                 <option>Temperature</option>
+            </select>
+            <select>
+                <option>20</option>
+                <option>50</option>
+                <option>250</option>
+                <option>500</option>
+                <option>700</option>
+                <option>1000</option>
             </select>
         </ControlRow>
 
         <ControlRow label="Overlay">
             <select>
                 <option>Wind</option>
+            </select>
+            <select>
+                <option>20</option>
+                <option>50</option>
+                <option>250</option>
+                <option>500</option>
+                <option>700</option>
+                <option>1000</option>
             </select>
         </ControlRow>
 
@@ -67,10 +85,6 @@
                     max={legendData.max}
                     unit={legendData.unit}
             />
-        </ControlRow>
-
-        <ControlRow label="Pressure Level">
-            <input type="range" />
         </ControlRow>
 
         <ControlRow label="Projection">
