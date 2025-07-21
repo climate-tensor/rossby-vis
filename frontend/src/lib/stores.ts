@@ -1,6 +1,7 @@
 import { writable, readable, derived } from 'svelte/store';
 import type { Writable, Readable } from 'svelte/store';
 import type { DataLayer, Probe, PhysicalMode, Projection } from './types';
+import { parseUrlHash, updateUrlHash } from './url-synchronizer';
 
 // Import the metadata layers from the metadata service
 import { 
@@ -136,3 +137,80 @@ export const probe: Writable<Probe> = writable({
 });
 
 export const isLoading: Writable<boolean> = writable(false);
+
+// =================================================================
+// 4. URL Synchronization - Phase 1.1 Implementation
+// =================================================================
+
+/**
+ * Initialize URL synchronization for all relevant stores
+ * This implements the bidirectional binding between stores and URL hash
+ * as specified in the migration plan Phase 1.1
+ */
+export function initializeUrlSync() {
+    let isUpdatingFromUrl = false;
+    
+    /**
+     * Update stores from current URL hash
+     */
+    function updateStoresFromUrl() {
+        if (isUpdatingFromUrl) return;
+        
+        isUpdatingFromUrl = true;
+        const urlState = parseUrlHash();
+        
+        // Update stores with parsed values, maintaining type safety
+        if (urlState.proj) {
+            projection.set(urlState.proj);
+        }
+        if (urlState.base) {
+            activeBaseLayerId.set(urlState.base);
+        }
+        if (urlState.ov !== undefined) {
+            activeOverlayLayerId.set(urlState.ov || null);
+        }
+        
+        isUpdatingFromUrl = false;
+    }
+    
+    /**
+     * Update URL hash when stores change
+     */
+    function setupStoreSubscriptions() {
+        // Subscribe to projection changes
+        projection.subscribe(($projection) => {
+            if (!isUpdatingFromUrl) {
+                updateUrlHash({ proj: $projection });
+            }
+        });
+        
+        // Subscribe to base layer changes
+        activeBaseLayerId.subscribe(($baseId) => {
+            if (!isUpdatingFromUrl) {
+                updateUrlHash({ base: $baseId });
+            }
+        });
+        
+        // Subscribe to overlay layer changes
+        activeOverlayLayerId.subscribe(($overlayId) => {
+            if (!isUpdatingFromUrl) {
+                updateUrlHash({ ov: $overlayId || undefined });
+            }
+        });
+    }
+    
+    // Listen for browser navigation events (back/forward buttons)
+    const handleHashChange = () => updateStoresFromUrl();
+    window.addEventListener('hashchange', handleHashChange);
+    
+    // Initialize stores from current URL on first load
+    updateStoresFromUrl();
+    
+    // Setup store-to-URL synchronization
+    setupStoreSubscriptions();
+    
+    // Return cleanup function
+    return () => {
+        window.removeEventListener('hashchange', handleHashChange);
+    };
+}

@@ -22,7 +22,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/proxy': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:8081',
         changeOrigin: true
       }
     }
