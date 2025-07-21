@@ -1,48 +1,63 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { simulationTime } from '$lib/stores';
-    import {createGlobeRenderer, type GlobeInstance} from '$lib/globe-renderer'; // 类型定义，很好
+    import * as d3 from 'd3';
+    import { simulationTime, projection } from '$lib/stores';
+    import { GlobeRenderer } from '$lib/globe-renderer';
 
-    let globe: GlobeInstance | undefined;
+    let globe: GlobeRenderer | undefined;
+    let mapSvg: SVGSVGElement;
+    let foregroundSvg: SVGSVGElement;
+    let mesh: any = null;
 
-    // 使用 Svelte 5 的 $effect 来代替旧的 $: 语法
-    // 这个 effect 会在 globe 或 $simulationTime 变化时自动运行
-    $effect(() => {
-        if (globe && $simulationTime) {
-            globe.setTime($simulationTime);
-        }
-    });
+    // Handle projection changes reactively
+    $: if (globe && mesh && $projection) {
+        // Recreate globe renderer when projection changes
+        const view = { width: window.innerWidth, height: window.innerHeight };
+        globe.destroy();
+        globe = new GlobeRenderer($projection, view);
+        
+        const mapSelection = d3.select(mapSvg);
+        const foregroundSelection = d3.select(foregroundSvg);
+        globe.render(mapSelection, foregroundSelection, mesh);
+    }
 
-    // Svelte Action 是处理这种场景的绝佳模式
-    async function initializeGlobe(node: HTMLCanvasElement) {
+    onMount(async () => {
         try {
-            // 直接 await 动态导入，让代码更扁平化
-            const module = await import('$lib/globe-renderer');
-
-            if (typeof module.createGlobeRenderer !== 'function') {
-                throw new Error("模块 '$lib/globe-renderer' 没有一个有效的默认导出 (default export)。它应该导出一个 class。");
+            const view = { width: window.innerWidth, height: window.innerHeight };
+            
+            // Choose appropriate topology resolution based on device type
+            const isMobile = /android|blackberry|iemobile|ipad|iphone|ipod|opera mini|webos/i.test(navigator.userAgent);
+            const topoFile = isMobile ? '/data/earth-topo-mobile.json' : '/data/earth-topo.json';
+            
+            console.log('Loading topology for', isMobile ? 'mobile' : 'desktop', 'device:', topoFile);
+            
+            const response = await fetch(topoFile);
+            if (!response.ok) {
+                throw new Error(`Failed to load topology data: ${response.statusText}`);
             }
-
-            globe = module.createGlobeRenderer(node);
-            globe.render();
+            mesh = await response.json();
+            console.log('Loaded mesh:', mesh);
+            
+            // Initial globe creation
+            globe = new GlobeRenderer($projection, view);
+            const mapSelection = d3.select(mapSvg);
+            const foregroundSelection = d3.select(foregroundSvg);
+            globe.render(mapSelection, foregroundSelection, mesh);
 
         } catch (error) {
-            console.error("初始化地球渲染器失败:", error);
+            console.error("Failed to initialize globe renderer:", error);
         }
 
-        return {
-            destroy() {
-                // 当组件销毁时，清理资源
-                globe?.destroy();
-            }
+        return () => {
+            // Cleanup when component is destroyed
+            globe?.destroy();
         };
-    }
+    });
 </script>
 
 <div id="display">
-    <svg id="map" class="fill-screen" xmlns="http://www.w3.org/2000/svg"></svg>
-    <!-- 将 Action 应用到我们希望渲染地球的 canvas 上 -->
-    <canvas id="base" class="fill-screen" use:initializeGlobe></canvas>
+    <svg bind:this={mapSvg} id="map" class="fill-screen" xmlns="http://www.w3.org/2000/svg"></svg>
+    <canvas id="animation" class="fill-screen"></canvas>
     <canvas id="overlay" class="fill-screen"></canvas>
-    <svg id="foreground" class="fill-screen" xmlns="http://www.w3.org/2000/svg"></svg>
+    <svg bind:this={foregroundSvg} id="foreground" class="fill-screen" xmlns="http://www.w3.org/2000/svg"></svg>
 </div>

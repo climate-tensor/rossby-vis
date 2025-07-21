@@ -7,6 +7,9 @@ export interface DataLayer {
     description: string;
     source: string;
     unit: string;
+    mode: PhysicalMode[] | 'all'; // The physical modes this layer is available in
+    role: 'base' | 'overlay';     // Whether this layer is a base or overlay
+    levels?: { label: string, value: number }[]; // Optional vertical levels
 }
 
 /**
@@ -34,4 +37,4 @@ export type Dimensionality = '2D' | '3D';
 /**
  * 用户可选择的地图投影方式
  */
-export type Projection = 'ortho' | 'merc' | 'equirectangular';
+export type Projection = 'orthographic' | 'mercator' | 'equirectangular';

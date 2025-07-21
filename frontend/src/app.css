@@ -1,20 +1,39 @@
 /* frontend/src/app.css */
 
 /* 1. 使用一个现代的 CSS Reset 来统一浏览器默认样式 */
-/* (我们可以选择一个，比如 modern-normalize.css) */
 @import 'modern-normalize/modern-normalize.css';
 
-/* 2. 定义全局的 CSS 变量 (Design Tokens) */
+/**************************************************************************************************
+ * At-Rules (Font Faces)
+ **************************************************************************************************/
+
+@font-face {
+    font-family: mplus-2p-light-sub;
+    src: url("/styles/mplus-2p-light-sub.ttf?v6");
+}
+
+@font-face {
+    font-family: monosocialiconsfont-sub;
+    src: url("/styles/monosocialiconsfont-sub.ttf?v1");
+}
+
+/**************************************************************************************************
+ * CSS Custom Properties (Design Tokens)
+ **************************************************************************************************/
+
 :root {
   /* 颜色 */
-  --color-background: #000000; /* 深蓝背景 */
-  --color-text-primary: #E2E8F0;   /* 主要文字颜色 */
-  --color-text-secondary: #94A3B8; /* 次要文字颜色 */
-  --color-accent: #38BDF8;       /* 强调色，如高亮和链接 */
-  --color-surface-1: #1E293B;      /* 卡片、面板背景 */
+  --color-background: #000005; /* 深蓝背景 */
+  --color-text-primary: #eeeeee;   /* 主要文字颜色 */
+  --color-text-secondary: #888888; /* 次要文字颜色 */
+  --color-accent: #e2b42e;       /* 强调色，如高亮和链接 */
+  --color-surface-1: rgba(0, 0, 5, 0.6);      /* 卡片、面板背景 */
+  --color-surface-2: rgba(5, 10, 30, 0.85);   /* 菜单背景 */
+  --color-disabled: #444444;
+  --color-hover: #ffffff;
 
   /* 字体 */
-  --font-family-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-family-sans: mplus-2p-light-sub, Helvetica, arial, freesans, clean, sans-serif;
   --font-family-mono: 'JetBrains Mono', monospace;
 
   /* 间距 */
@@ -22,14 +41,434 @@
   --spacing-2: 0.5rem;  /* 8px */
   --spacing-4: 1rem;    /* 16px */
 
-  /* 其他... */
+  /* 字体大小 */
+  --font-size-base: 1em;
+  --font-size-large: 1.75rem;
+  --font-size-xlarge: 2.4rem;
+  --font-size-small: 1.25rem;
+
+  /* 边框半径 */
+  --border-radius: 0.5rem;
+
+  /* 过渡效果 */
+  --transition-fast: 125ms ease-in;
+  --transition-normal: 250ms ease;
 }
 
-/* 3. 设置基础的 body 样式 */
+/**************************************************************************************************
+ * Global Styling Reset
+ **************************************************************************************************/
+
+html, body, div, span, h1, h2, h3, h4, h5, h6, p, a, svg, canvas {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    font: var(--font-size-base) var(--font-family-sans);
+    -webkit-font-smoothing: subpixel-antialiased; /* safari disables subpixel antialiasing for some reason */
+}
+
+@media (max-width: 825px), (max-height: 700px) {
+    html, body, div, span, h1, h2, h3, h4, h5, h6, p, a, svg, canvas {
+        font-size: 0.8em;
+    }
+}
+
+/**************************************************************************************************
+ * Page Styling
+ **************************************************************************************************/
+
 body {
-  font-family: var(--font-family-sans);
-  background-color: var(--color-background);
-  color: var(--color-text-primary);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+    font-family: var(--font-family-sans);
+    background-color: var(--color-background);
+    color: var(--color-text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+a, .text-button {
+    color: var(--color-text-secondary);
+    text-decoration: none;
+}
+
+.text-button.highlighted {
+    color: var(--color-accent);
+}
+
+.text-button.disabled {
+    color: var(--color-disabled);
+}
+
+a:hover, a:focus, .no-touch .text-button:hover, .no-touch .text-button:focus, .text-button:active {
+    color: var(--color-hover);
+    cursor: pointer;
+    transition: color var(--transition-fast);
+    -webkit-transition: color var(--transition-fast);
+}
+
+p.invisible, span.invisible, tr.invisible {
+    display: none;
+}
+
+svg {
+    overflow: hidden;  /* Do not let IE draw outside the bounds of the svg element. */
+}
+
+/**************************************************************************************************
+ * Layout Components
+ **************************************************************************************************/
+
+#app {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.fill-screen {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+#display {
+    cursor: default;
+}
+
+#map, #animation, #overlay, #foreground {
+    position: absolute;
+    top: 0;
+    left: 0;
+    will-change: transform;
+}
+
+/**************************************************************************************************
+ * UI Panels and Controls
+ **************************************************************************************************/
+
+#details {
+    position: absolute;
+    bottom: 3%;
+    left: 2%;
+    pointer-events: none;  /* This div is just a container--do not let it interfere with operation of the map. */
+}
+
+#earth {
+    font-size: var(--font-size-xlarge);
+}
+
+#status, #location, #menu {
+    font-size: var(--font-size-large);
+}
+
+#status, #location, #earth {
+    background-color: var(--color-surface-1);
+    border-radius: var(--border-radius);
+    display: table;
+    margin-top: var(--spacing-4);
+    padding: 0 var(--spacing-4) 0 var(--spacing-4);
+    pointer-events: all;
+}
+
+#menu {
+    background-color: var(--color-surface-2);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+    pointer-events: all;
+    margin-top: var(--spacing-4);
+    padding: var(--spacing-2) var(--spacing-4) var(--spacing-2) var(--spacing-4);
+    opacity: 1;
+    max-height: 34rem;
+    transition: opacity var(--transition-normal), max-height var(--transition-normal), margin-top var(--transition-normal);
+    -webkit-transition: opacity var(--transition-normal), max-height var(--transition-normal), margin-top var(--transition-normal);
+}
+
+#menu.invisible {
+    margin-top: 0;
+    padding: 0 var(--spacing-4) 0 var(--spacing-4);
+    opacity: 0;
+    max-height: 0;
+    transition: opacity var(--transition-normal), max-height var(--transition-normal), margin-top var(--transition-normal);
+    -webkit-transition: opacity var(--transition-normal), max-height var(--transition-normal), margin-top var(--transition-normal);
+}
+
+#progress {
+    padding-left: var(--spacing-4);
+}
+
+#nav-backward, #nav-backward-more, #nav-forward, #nav-forward-more {
+    padding-left: var(--spacing-4);
+    padding-right: var(--spacing-4);
+}
+
+#modes {
+    padding-left: var(--spacing-1);
+    padding-right: var(--spacing-1);
+}
+
+#tools {
+    padding-left: var(--spacing-1);
+    padding-right: var(--spacing-1);
+}
+
+#lang {
+    font-size: var(--font-size-small);
+    float: right;
+    padding-top: var(--spacing-2);
+}
+
+.internal-link {
+    text-decoration: none;
+}
+
+.sup {
+    position: relative;
+   	bottom: 0.3em;
+   	font-size: 0.6em;
+}
+
+.sub {
+    position: relative;
+   	top: 0.3em;
+   	font-size: 0.6em;
+}
+
+/**************************************************************************************************
+ * SVG Element Styling
+ **************************************************************************************************/
+
+.coastline, .lakes {
+    stroke: #ffffff;
+    stroke-width: 1.25;
+    fill: none;
+}
+
+.firefox .coastline, .firefox .lakes {
+    stroke-width: 1.0;
+}
+
+.graticule {
+    stroke: #505050;
+    stroke-width: 1.0;
+    fill: none;
+}
+
+.hemisphere {
+    stroke: #707070;
+    stroke-width: 1.25;
+    fill: none;
+}
+
+.background-sphere {
+    stroke: none;
+    fill: #303030;
+}
+
+.foreground-sphere {
+    stroke: var(--color-background);
+    stroke-width: 4.0;
+    fill: none;
+    -moz-user-select: none;  /* Oddly, Win FF sometimes selects this SVG element. Disable. */
+    user-select: none;
+}
+
+.location-mark {
+    stroke: #3aff3a;
+    stroke-width: 2.5;
+    fill: none;
+}
+
+/**************************************************************************************************
+ * Component-specific Styles
+ **************************************************************************************************/
+
+/* Control Panel and UI Components */
+.ui-panel {
+    background-color: var(--color-surface-1);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-2) var(--spacing-4);
+    margin-top: var(--spacing-4);
+    pointer-events: all;
+}
+
+.ui-panel.menu {
+    background-color: var(--color-surface-2);
+    opacity: 1;
+    max-height: 34rem;
+    overflow: hidden;
+    transition: opacity var(--transition-normal), max-height var(--transition-normal), margin-top var(--transition-normal);
+}
+
+.ui-panel.menu.hidden {
+    margin-top: 0;
+    padding: 0 var(--spacing-4);
+    opacity: 0;
+    max-height: 0;
+}
+
+/* Control Panel Table Styling */
+.control-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-large);
+}
+
+.control-table td {
+    padding: var(--spacing-1) 0;
+    vertical-align: middle;
+}
+
+.control-table td:first-child {
+    text-align: right;
+    padding-right: var(--spacing-4);
+}
+
+.control-table td:last-child {
+    text-align: center;
+}
+
+/* Toggle Buttons */
+.toggle-button {
+    padding: var(--spacing-1) var(--spacing-2);
+    margin: 0 var(--spacing-1);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: color var(--transition-fast);
+    user-select: none;
+}
+
+.toggle-button:hover {
+    color: var(--color-hover);
+}
+
+.toggle-button.active {
+    color: var(--color-accent);
+}
+
+.toggle-button.disabled {
+    color: var(--color-disabled);
+    cursor: default;
+}
+
+/* Icon Buttons */
+.icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-1);
+    margin: 0 var(--spacing-1);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: color var(--transition-fast);
+    user-select: none;
+}
+
+.icon-button:hover {
+    color: var(--color-hover);
+}
+
+.icon-button svg {
+    width: 1.2em;
+    height: 1.2em;
+}
+
+/* Mode and Tool Buttons */
+.mode-buttons, .tool-buttons {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-1);
+}
+
+/* Progress Indicator */
+.progress-indicator {
+    padding-left: var(--spacing-4);
+    color: var(--color-text-secondary);
+}
+
+/* Info Display */
+.info-display {
+    font-size: var(--font-size-xlarge);
+}
+
+.info-display.large {
+    font-size: var(--font-size-xlarge);
+}
+
+.info-display.medium {
+    font-size: var(--font-size-large);
+}
+
+/* Status and Location Displays */
+.status-display, .location-display {
+    background-color: var(--color-surface-1);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-2) var(--spacing-4);
+    margin-top: var(--spacing-4);
+    pointer-events: all;
+    font-size: var(--font-size-large);
+}
+
+/* Navigation Controls */
+.nav-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+}
+
+.nav-button {
+    padding: var(--spacing-1) var(--spacing-2);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: color var(--transition-fast);
+}
+
+.nav-button:hover {
+    color: var(--color-hover);
+}
+
+/* Globe Container */
+.globe-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+/* Utility Classes */
+.hidden {
+    display: none !important;
+}
+
+.invisible {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.highlighted {
+    color: var(--color-accent) !important;
+}
+
+/* Responsive Design */
+@media (max-width: 825px), (max-height: 700px) {
+    .ui-panel {
+        margin-top: var(--spacing-2);
+        padding: var(--spacing-1) var(--spacing-2);
+    }
+    
+    .control-table {
+        font-size: 1.4rem;
+    }
+    
+    .info-display.large {
+        font-size: 2rem;
+    }
+    
+    .info-display.medium {
+        font-size: 1.4rem;
+    }
+    
+    .status-display, .location-display {
+        font-size: 1.4rem;
+        padding: var(--spacing-1) var(--spacing-2);
+    }
 }

@@ -8,14 +8,60 @@
     import ModeToggleGroup from "./ModeToggleGroup.svelte";
     import ProjectionToggle from './ProjectionToggle.svelte';
     import Legend from './Legend.svelte';
+    
+    // Import stores
+    import { 
+        physicalMode, 
+        activeBaseLayer, 
+        activeOverlayLayer,
+        availableBaseLayers,
+        availableOverlayLayers,
+        activeBaseLayerId,
+        activeOverlayLayerId,
+        probe
+    } from '../lib/stores.js';
 
-    let mode = $state('atm');
     let showGrid = $state(false);
     let showPin = $state(true);
+    
+    // Create a local variable that syncs with the physicalMode store
+    let currentPhysicalMode = $state($physicalMode);
+    
+    // Create local variables for layer selection
+    let currentBaseLayerId = $state($activeBaseLayerId);
+    let currentOverlayLayerId = $state($activeOverlayLayerId);
+    let currentSelectedLevel = $state('');
+    
+    // Sync changes back to the stores
+    $effect(() => {
+        physicalMode.set(currentPhysicalMode);
+    });
+    
+    $effect(() => {
+        activeBaseLayerId.set(currentBaseLayerId);
+    });
+    
+    $effect(() => {
+        activeOverlayLayerId.set(currentOverlayLayerId);
+    });
+    
+    // Sync store changes to local variables
+    $effect(() => {
+        currentPhysicalMode = $physicalMode;
+    });
+    
+    $effect(() => {
+        currentBaseLayerId = $activeBaseLayerId;
+    });
+    
+    $effect(() => {
+        currentOverlayLayerId = $activeOverlayLayerId;
+    });
 
     let {
-        dataLayer,
-        dataSource
+        dataLayer = $bindable(),
+        dataSource = $bindable(),
+        menuVisible = $bindable()
     } = $props();
 
     let legendData = $state({
@@ -24,12 +70,6 @@
         max: 50,
         unit: "°C"
     });
-
-    let boardVisible = $state(false);
-
-    function toggle_board() {
-        boardVisible = !boardVisible;
-    }
 
 </script>
 
@@ -42,13 +82,13 @@
     </div>
 
     <div id="control-panel-handle">
-        <button id="show-board" class="text-button" title="title" onclick={toggle_board}>Earth</button>
+        <button id="show-board" class="text-button" title="Toggle Menu" onclick={() => menuVisible = !menuVisible}>Earth</button>
     </div>
 
-    <div id="control-panel-board"  class="control-panel-grid" class:invisible={!boardVisible}>
+    <div id="control-panel-board"  class="control-panel-grid" class:invisible={!menuVisible}>
         <ControlRow label="Controls">
             <OptionToggles bind:grid={showGrid} bind:pin={showPin} />
-            <ModeToggleGroup bind:value={mode} />
+            <ModeToggleGroup bind:value={currentPhysicalMode} />
         </ControlRow>
 
         <ControlRow label="Data">
@@ -60,32 +100,33 @@
         </ControlRow>
 
         <ControlRow label="Base">
-            <select>
-                <option>Temperature</option>
-            </select>
-            <select>
-                <option>20</option>
-                <option>50</option>
-                <option>250</option>
-                <option>500</option>
-                <option>700</option>
-                <option>1000</option>
+            <select bind:value={currentBaseLayerId}>
+                {#each $availableBaseLayers as layer}
+                    <option value={layer.id}>{layer.name}</option>
+                {/each}
             </select>
         </ControlRow>
 
         <ControlRow label="Overlay">
-            <select>
-                <option>Wind</option>
-            </select>
-            <select>
-                <option>20</option>
-                <option>50</option>
-                <option>250</option>
-                <option>500</option>
-                <option>700</option>
-                <option>1000</option>
+            <select bind:value={currentOverlayLayerId}>
+                <option value="">None</option>
+                {#each $availableOverlayLayers as layer}
+                    <option value={layer.id}>{layer.name}</option>
+                {/each}
             </select>
         </ControlRow>
+
+        {#if $activeBaseLayer?.levels && $activeBaseLayer.levels.length > 0}
+            <ControlRow label={$physicalMode === 'atm' ? 'Pressure Level' : $physicalMode === 'ocn' ? 'Depth' : 'Level'}>
+                <select bind:value={currentSelectedLevel}>
+                    {#each $activeBaseLayer.levels as level}
+                        <option value={level.value}>
+                            {level.label}
+                        </option>
+                    {/each}
+                </select>
+            </ControlRow>
+        {/if}
 
         <ControlRow label="Scale">
             <Legend
@@ -111,6 +152,7 @@
         display: flex;
         flex-direction: column;
         z-index: 1000;
+        pointer-events: all;
     }
 
     .control-panel-grid {
