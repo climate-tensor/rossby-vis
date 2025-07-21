@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
     import ControlRow from './ControlRow.svelte';
     import ProbeDisplay from './ProbeDisplay.svelte';
     import Status from "./Status.svelte";
@@ -24,48 +24,50 @@
     let showGrid = $state(false);
     let showPin = $state(true);
     
-    // Create a local variable that syncs with the physicalMode store
-    let currentPhysicalMode = $state($physicalMode);
-    
     // Create local variables for layer selection
     let currentBaseLayerId = $state($activeBaseLayerId);
     let currentOverlayLayerId = $state($activeOverlayLayerId);
     let currentSelectedLevel = $state('');
     
-    // Sync changes back to the stores
-    $effect(() => {
-        physicalMode.set(currentPhysicalMode);
-    });
+    // Note: physicalMode is derived from metadata and cannot be set directly
     
     $effect(() => {
+        console.log('🔄 ControlPanel: Setting activeBaseLayerId to:', currentBaseLayerId);
         activeBaseLayerId.set(currentBaseLayerId);
     });
     
     $effect(() => {
+        console.log('🔄 ControlPanel: Setting activeOverlayLayerId to:', currentOverlayLayerId);
         activeOverlayLayerId.set(currentOverlayLayerId);
     });
     
     // Sync store changes to local variables
     $effect(() => {
-        currentPhysicalMode = $physicalMode;
-    });
-    
-    $effect(() => {
+        console.log('📥 ControlPanel: Store activeBaseLayerId changed to:', $activeBaseLayerId);
         currentBaseLayerId = $activeBaseLayerId;
     });
     
     $effect(() => {
+        console.log('📥 ControlPanel: Store activeOverlayLayerId changed to:', $activeOverlayLayerId);
         currentOverlayLayerId = $activeOverlayLayerId;
+    });
+    
+    // Debug logging for available layers
+    $effect(() => {
+        console.log('📋 ControlPanel: Available base layers:', $availableBaseLayers.map(l => ({ id: l.id, name: l.name })));
+        console.log('📋 ControlPanel: Available overlay layers:', $availableOverlayLayers.map(l => ({ id: l.id, name: l.name })));
+        console.log('🎯 ControlPanel: Active base layer:', $activeBaseLayer ? { id: $activeBaseLayer.id, name: $activeBaseLayer.name } : null);
+        console.log('🎯 ControlPanel: Active overlay layer:', $activeOverlayLayer ? { id: $activeOverlayLayer.id, name: $activeOverlayLayer.name } : null);
     });
 
     let {
         dataLayer = $bindable(),
         dataSource = $bindable(),
-        menuVisible = $bindable()
+        menuVisible = $bindable(false)
     } = $props();
 
     let legendData = $state({
-        colormap: [[48, 59, 107],[255, 255, 255],[128, 35, 21]],
+        colormap: [[48, 59, 107],[255, 255, 255],[128, 35, 21]] as [number, number, number][],
         min: -35,
         max: 50,
         unit: "°C"
@@ -88,7 +90,7 @@
     <div id="control-panel-board"  class="control-panel-grid" class:invisible={!menuVisible}>
         <ControlRow label="Controls">
             <OptionToggles bind:grid={showGrid} bind:pin={showPin} />
-            <ModeToggleGroup bind:value={currentPhysicalMode} />
+            <ModeToggleGroup />
         </ControlRow>
 
         <ControlRow label="Data">
@@ -100,7 +102,11 @@
         </ControlRow>
 
         <ControlRow label="Base">
-            <select bind:value={currentBaseLayerId}>
+            <select bind:value={currentBaseLayerId} onchange={(e) => {
+                const target = e.target as HTMLSelectElement;
+                console.log('🎯 ControlPanel: User selected base layer:', target.value);
+                console.log('🎯 ControlPanel: currentBaseLayerId is now:', currentBaseLayerId);
+            }}>
                 {#each $availableBaseLayers as layer}
                     <option value={layer.id}>{layer.name}</option>
                 {/each}

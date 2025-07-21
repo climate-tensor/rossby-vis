@@ -5,11 +5,18 @@
   import Status from './components/Status.svelte';
   import InfoDisplay from './components/InfoDisplay.svelte';
   import Progress from './components/Progress.svelte';
+  
+  // Import stores
+  import { activeBaseLayer, activeOverlayLayer } from './lib/stores.js';
 
-  // Application state
-  let dataLayer = $state('GFS');
-  let dataSource = $state('NCEP/National Weather Service/NOAA');
-  let menuVisible = $state(false);
+  // Application state - now derived from the stores
+  let dataLayer: string;
+  let dataSource: string;
+  let menuVisible = false;
+
+  // Reactive statements instead of $derived runes
+  $: dataLayer = $activeOverlayLayer?.name || $activeBaseLayer?.name || 'No layer selected';
+  $: dataSource = $activeOverlayLayer?.source || $activeBaseLayer?.source || 'No source available';
 </script>
 
 <main id="app">

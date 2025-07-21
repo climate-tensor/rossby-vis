@@ -12,7 +12,7 @@ const µ = {
 const MIN_MOVE = 4; // slack before a drag operation begins (pixels)
 
 export class GlobeRenderer {
-    private projection: d3.GeoProjection;
+    private _projection: d3.GeoProjection;
     private view: { width: number; height: number };
     private isDragging = false;
     private startMouse: [number, number] | null = null;
@@ -20,7 +20,11 @@ export class GlobeRenderer {
 
     constructor(projectionName: Projection, view: { width: number; height: number }) {
         this.view = view;
-        this.projection = this.createProjection(projectionName);
+        this._projection = this.createProjection(projectionName);
+    }
+
+    public get projection(): d3.GeoProjection {
+        return this._projection;
     }
 
     private createProjection(projectionName: Projection): d3.GeoProjection {
@@ -58,12 +62,18 @@ export class GlobeRenderer {
         };
     }
 
-    public render(mapSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>, foregroundSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>, mesh: any) {
-        const path = d3.geoPath(this.projection);
+    public render(
+        mapSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>, 
+        foregroundSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>, 
+        overlayCanvas: d3.Selection<HTMLCanvasElement, unknown, null, undefined>,
+        mesh: any
+    ) {
+        const path = d3.geoPath(this._projection);
 
         // Clear previous render
         mapSvg.selectAll('*').remove();
         foregroundSvg.selectAll('*').remove();
+        overlayCanvas.node()!.getContext('2d')!.clearRect(0, 0, this.view.width, this.view.height);
 
         const defs = mapSvg.append('defs');
         defs.append('path')
@@ -99,16 +109,20 @@ export class GlobeRenderer {
             .attr('class', 'foreground-sphere');
 
         // Set up drag interaction
-        this.setupDragInteraction(mapSvg, foregroundSvg);
+        this.setupDragInteraction(mapSvg, foregroundSvg, overlayCanvas);
     }
 
-    private setupDragInteraction(mapSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>, foregroundSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>) {
-        const drag = d3.drag<SVGSVGElement, unknown>()
+    private setupDragInteraction(
+        mapSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>, 
+        foregroundSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>,
+        overlayCanvas: d3.Selection<HTMLCanvasElement, unknown, null, undefined>
+    ) {
+        const drag = d3.drag<Element, unknown>()
             .on('start', (event) => {
                 this.isDragging = false;
                 this.startMouse = [event.x, event.y];
-                if (this.projection.rotate) {
-                    this.startRotation = this.projection.rotate() as [number, number, number];
+                if (this._projection.rotate) {
+                    this.startRotation = this._projection.rotate() as [number, number, number];
                 }
             })
             .on('drag', (event) => {
@@ -133,17 +147,17 @@ export class GlobeRenderer {
                 const rotateY = dx * sensitivity;
 
                 // Apply rotation to the projection
-                if (this.projection.rotate) {
+                if (this._projection.rotate) {
                     const newRotation: [number, number, number] = [
                         this.startRotation[0] + rotateY,
                         µ.clamp(this.startRotation[1] + rotateX, -90, 90),
                         this.startRotation[2]
                     ];
-                    this.projection.rotate(newRotation);
+                    this._projection.rotate(newRotation);
                 }
 
                 // Re-render the globe
-                this.redraw(mapSvg, foregroundSvg);
+                this.redraw(mapSvg, foregroundSvg, overlayCanvas);
             })
             .on('end', () => {
                 this.isDragging = false;
@@ -151,13 +165,18 @@ export class GlobeRenderer {
                 this.startRotation = null;
             });
 
-        // Apply drag to both SVG elements
-        mapSvg.call(drag);
-        foregroundSvg.call(drag);
+        // Apply drag to all interactive elements
+        mapSvg.call(drag as any);
+        foregroundSvg.call(drag as any);
+        overlayCanvas.call(drag as any);
     }
 
-    private redraw(mapSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>, foregroundSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>) {
-        const path = d3.geoPath(this.projection);
+    private redraw(
+        mapSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>, 
+        foregroundSvg: d3.Selection<SVGSVGElement, unknown, null, undefined>,
+        overlayCanvas: d3.Selection<HTMLCanvasElement, unknown, null, undefined>
+    ) {
+        const path = d3.geoPath(this._projection);
         
         // Update all paths with their bound data
         mapSvg.selectAll('path').attr('d', path as any);
@@ -165,6 +184,125 @@ export class GlobeRenderer {
         
         // Update the sphere definition in defs
         mapSvg.select('defs').select('path#sphere').attr('d', path as any);
+
+        // Redraw the overlay canvas if there is data
+        // This part needs to be connected to the data store
+    }
+
+    public renderScalarData(
+        overlayCanvas: d3.Selection<HTMLCanvasElement, unknown, null, undefined>,
+        scalarData: {
+            data: number[][];
+            bounds: { north: number; south: number; east: number; west: number };
+            width: number;
+            height: number;
+        },
+        colorScale: d3.ScaleSequential<string>
+    ) {
+        const canvas = overlayCanvas.node()!;
+        const context = canvas.getContext('2d');
+        if (!context) return;
+
+        const { data, bounds, width: dataWidth, height: dataHeight } = scalarData;
+        const { north, south, east, west } = bounds;
+
+        // Clear the canvas
+        context.clearRect(0, 0, this.view.width, this.view.height);
+        
+        // Create an image buffer for the entire view
+        const imageData = context.createImageData(this.view.width, this.view.height);
+        const pixels = imageData.data;
+
+        // Create a mask to track which pixels are visible on the globe
+        const path = d3.geoPath(this._projection).context(null);
+        const spherePath = path({ type: 'Sphere' });
+        
+        // Function to check if a point is inside the sphere
+        const isInsideSphere = (x: number, y: number): boolean => {
+            // Simple check: for orthographic projection, check if point is within the circular bounds
+            const cx = this.view.width / 2;
+            const cy = this.view.height / 2;
+            const scale = this._projection.scale();
+            const radius = scale; // For orthographic, the radius equals the scale
+            
+            const dx = x - cx;
+            const dy = y - cy;
+            return (dx * dx + dy * dy) <= (radius * radius);
+        };
+
+        // Create interpolation helpers
+        const lonStep = (east - west) / (dataWidth - 1);
+        const latStep = (north - south) / (dataHeight - 1);
+
+        // Helper to bilinearly interpolate data value at given lon/lat
+        const interpolateValue = (lon: number, lat: number): number | null => {
+            // Convert lon/lat to data grid coordinates
+            const i = (lon - west) / lonStep;
+            const j = (north - lat) / latStep;
+            
+            const fi = Math.floor(i), ci = Math.min(fi + 1, dataWidth - 1);
+            const fj = Math.floor(j), cj = Math.min(fj + 1, dataHeight - 1);
+            
+            if (fi < 0 || fi >= dataWidth || fj < 0 || fj >= dataHeight) {
+                return null;
+            }
+            
+            const g00 = data[fj][fi];
+            const g10 = data[fj][ci];
+            const g01 = data[cj][fi];
+            const g11 = data[cj][ci];
+            
+            if (g00 === null || g10 === null || g01 === null || g11 === null ||
+                isNaN(g00) || isNaN(g10) || isNaN(g01) || isNaN(g11)) {
+                return null;
+            }
+            
+            // Bilinear interpolation
+            const rx = i - fi;
+            const ry = j - fj;
+            return g00 * (1 - rx) * (1 - ry) +
+                   g10 * rx * (1 - ry) +
+                   g01 * (1 - rx) * ry +
+                   g11 * rx * ry;
+        };
+
+        // Process each pixel in the view
+        for (let y = 0; y < this.view.height; y++) {
+            for (let x = 0; x < this.view.width; x++) {
+                const idx = (y * this.view.width + x) * 4;
+                
+                // Default to transparent
+                pixels[idx + 3] = 0;
+                
+                // Check if pixel is inside the sphere
+                if (!isInsideSphere(x, y)) continue;
+                
+                // Invert the projection to get lon/lat
+                const coord = this._projection.invert && this._projection.invert([x, y]);
+                if (!coord || coord[0] === null || coord[1] === null || isNaN(coord[0]) || isNaN(coord[1])) {
+                    continue;
+                }
+                
+                const [lon, lat] = coord;
+                
+                // Interpolate the data value at this location
+                const value = interpolateValue(lon, lat);
+                if (value === null) continue;
+                
+                // Get the color for this value
+                const color = d3.color(colorScale(value));
+                if (color) {
+                    const rgb = color.rgb();
+                    pixels[idx] = rgb.r;
+                    pixels[idx + 1] = rgb.g;
+                    pixels[idx + 2] = rgb.b;
+                    pixels[idx + 3] = 160; // Alpha channel (0.63 opacity)
+                }
+            }
+        }
+        
+        // Draw the image data to the canvas
+        context.putImageData(imageData, 0, 0);
     }
 
     public setTime(time: Date) {

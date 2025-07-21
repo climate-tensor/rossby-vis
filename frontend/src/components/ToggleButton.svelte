@@ -5,21 +5,27 @@
     type Props = {
         icon: typeof SvelteComponent;
         active?: boolean;
+        disabled?: boolean;
         label?: string;
+        onclick?: () => void;
     };
 
     // Use $props for Svelte 5 syntax
-    let { icon, active = false, label = 'Toggle Button' }: Props = $props();
+    let { icon, active = false, disabled = false, label = 'Toggle Button', onclick }: Props = $props();
 </script>
 
 <button
         class="toggle-button"
         class:active
+        class:disabled
         aria-label={label}
         aria-pressed={active}
+        {disabled}
+        onclick={onclick}
 >
     <Icon size="1.5em">
-        <svelte:component this={icon} />
+        {@const Component = icon}
+        <Component />
     </Icon>
 </button>
 
@@ -41,7 +47,7 @@
         justify-content: center;
     }
 
-    .toggle-button:hover {
+    .toggle-button:hover:not(:disabled) {
         background-color: rgba(255, 255, 255, 0.1);
     }
 
@@ -49,5 +55,18 @@
     .toggle-button.active {
         background-color: rgba(40, 40, 40, 0.85); /* Dim black background */
         color: #ffffff; /* White icon color */
+    }
+
+    /* Disabled state */
+    .toggle-button:disabled,
+    .toggle-button.disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+        color: #555555;
+    }
+
+    .toggle-button:disabled:hover,
+    .toggle-button.disabled:hover {
+        background-color: transparent;
     }
 </style>

@@ -1,28 +1,36 @@
 <script lang="ts">
     import ToggleButton from './ToggleButton.svelte';
+    import { currentMode, availableModes, metadataService } from '$lib/metadata-service';
+    import type { PhysicalMode } from '$lib/types';
 
     // Import icons
     import IconAtmosphere from '~icons/mdi/weather-windy';
     import IconOcean from '~icons/mdi/waves';
     import IconSurface from '~icons/mdi/web';
 
-    const modes = [
-        { value: 'atm', label: 'Atmosphere', icon: IconAtmosphere },
-        { value: 'ocn', label: 'Ocean', icon: IconOcean },
-        { value: 'sfc', label: 'Surface', icon: IconSurface }
+    const allModes = [
+        { value: 'atm' as PhysicalMode, label: 'Atmosphere', icon: IconAtmosphere },
+        { value: 'ocn' as PhysicalMode, label: 'Ocean', icon: IconOcean },
+        { value: 'sfc' as PhysicalMode, label: 'Surface', icon: IconSurface }
     ];
 
-    // This component now has a bindable 'value' prop
-    let { value = $bindable('atm') } = $props();
+    // Filter modes to show only available ones
+    $: visibleModes = allModes.filter(mode => $availableModes.includes(mode.value));
+
+    // Use metadata-driven mode instead of bindable prop
+    function handleModeChange(newMode: PhysicalMode) {
+        metadataService.setMode(newMode);
+    }
 </script>
 
 <div class="mode-toggle-group" role="radiogroup" aria-label="System Mode">
-    {#each modes as mode (mode.value)}
+    {#each visibleModes as mode (mode.value)}
         <ToggleButton
                 icon={mode.icon}
                 label={mode.label}
-                active={value === mode.value}
-                onclick={() => (value = mode.value)}
+                active={$currentMode === mode.value}
+                disabled={!$availableModes.includes(mode.value)}
+                onclick={() => handleModeChange(mode.value)}
         />
     {/each}
 </div>

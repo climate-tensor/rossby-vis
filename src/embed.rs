@@ -1,7 +1,7 @@
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
-#[folder = "public/"]
+#[folder = "frontend/dist/"]
 pub struct StaticAssets;
 
 #[cfg(test)]

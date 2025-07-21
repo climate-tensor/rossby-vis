@@ -5,7 +5,7 @@
     import IconGrid from '~icons/mdi/grid';
     import IconPin from '~icons/mdi/pin';
 
-    let { grid, pin } = $props<{ grid: boolean, pin: boolean }>();
+    let { grid = $bindable(), pin = $bindable() } = $props<{ grid: boolean, pin: boolean }>();
 </script>
 
 <div class="options-container">

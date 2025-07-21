@@ -2,12 +2,19 @@ import { writable, readable, derived } from 'svelte/store';
 import type { Writable, Readable } from 'svelte/store';
 import type { DataLayer, Probe, PhysicalMode, Projection } from './types';
 
+// Import the metadata layers from the metadata service
+import { 
+    availableMetadataLayers, 
+    currentMode as metadataMode,
+    timeNavigation,
+    selectedLevel,
+    dimensionAnalysis,
+    isMetadataLoading,
+    metadataService 
+} from './metadata-service';
 
-// =================================================================
-// 1. Data Catalog - Readable Stores
-// =================================================================
-
-export const dataLayers: Readable<DataLayer[]> = readable([
+// Static fallback layers for when metadata is not available
+const staticDataLayers: DataLayer[] = [
     // --- Base Layers ---
     { id: 't2m', name: '2m Temperature', description: 'Temperature at 2 meters above ground.', source: 'ERA5', unit: '°C', mode: ['sfc', 'atm'], role: 'base' },
     { id: 'sst', name: 'Sea Surface Temp', description: 'Sea surface temperature.', source: 'ERA5', unit: '°C', mode: ['ocn'], role: 'base' },
@@ -23,7 +30,41 @@ export const dataLayers: Readable<DataLayer[]> = readable([
             { label: '500 hPa', value: 500 },
         ]
     },
-]);
+];
+
+// Convert metadata layers to DataLayer format
+function convertMetadataLayer(metaLayer: any): DataLayer {
+    // Map metadata categories to mode arrays
+    const modeMap: Record<string, PhysicalMode[]> = {
+        'atmospheric': ['atm', 'sfc'],
+        'oceanic': ['ocn'],
+        'surface': ['sfc', 'atm']
+    };
+
+    return {
+        id: metaLayer.id,
+        name: metaLayer.name,
+        description: metaLayer.description,
+        source: metaLayer.source,
+        unit: metaLayer.unit,
+        mode: modeMap[metaLayer.category] || ['sfc'],
+        role: metaLayer.role
+    };
+}
+
+// Dynamic data layers that combine static and metadata-driven layers
+export const dataLayers: Readable<DataLayer[]> = derived(
+    [availableMetadataLayers],
+    ([$metadataLayers]) => {
+        if ($metadataLayers.length > 0) {
+            // Use metadata-driven layers when available
+            return $metadataLayers.map(convertMetadataLayer);
+        } else {
+            // Fallback to static layers
+            return staticDataLayers;
+        }
+    }
+);
 
 
 // =================================================================
@@ -33,18 +74,37 @@ export const dataLayers: Readable<DataLayer[]> = readable([
 export const projection: Writable<Projection> = writable('orthographic');
 export const activeBaseLayerId: Writable<string> = writable('t2m');
 export const activeOverlayLayerId: Writable<string | null> = writable('wnd10m');
-export const simulationTime: Writable<Date> = writable(new Date());
 export const isPlaying: Writable<boolean> = writable(true);
-export const verticalLevel: Writable<number> = writable(500);
+
+// Connect to metadata service stores - these are derived from metadata
+export const physicalMode: Readable<PhysicalMode> = derived(
+    [metadataMode],
+    ([$mode]) => $mode || 'sfc'
+);
+
+export const simulationTime: Readable<Date> = derived(
+    [timeNavigation],
+    ([$timeNav]) => $timeNav ? new Date($timeNav.current) : new Date()
+);
+
+export const verticalLevel: Readable<number> = derived(
+    [selectedLevel],
+    ([$level]) => {
+        if ($level === null) return 500;
+        const parsed = parseFloat($level);
+        return isNaN(parsed) ? 500 : parsed;
+    }
+);
 
 
 // =================================================================
 // 3. 派生的结果 (The Result) & App State
 // =================================================================
 
-export const physicalMode: Writable<PhysicalMode> = writable('atm');
-
-export const dimensionality: Writable<'2D' | '3D'> = writable('2D');
+export const dimensionality: Readable<'2D' | '3D'> = derived(
+    [dimensionAnalysis],
+    ([$dimAnalysis]) => $dimAnalysis?.is3D ? '3D' : '2D'
+);
 
 export const availableBaseLayers = derived(
     [dataLayers, physicalMode],
