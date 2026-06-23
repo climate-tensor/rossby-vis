@@ -47,8 +47,10 @@ class TemperatureProduct implements Product {
         const { metadata, data } = rawData;
         const { shape, bounds } = metadata;
         
-        // Extract temperature data - handle various naming conventions
-        const tempData = data.t2m || data.temperature || data.t || data.temp || data.d2m || data.dewpoint || [];
+        // Extract temperature data - prefer this product's own id, then fall
+        // back to common naming conventions.
+        const tempData =
+            data[this.id] || data.t2m || data.temperature || data.t || data.temp || data.d2m || data.dewpoint || [];
 
         if (tempData.length === 0) {
             throw new Error('Missing temperature data in dataset');
@@ -66,11 +68,13 @@ class TemperatureProduct implements Product {
             height: shape[latIndex]   // latitude dimension
         };
 
+        // Use ?? so legitimate zero bounds (e.g. west = 0 for 0-360 grids) are
+        // preserved rather than replaced by defaults.
         const gridBounds = {
-            north: bounds.north || 90,
-            south: bounds.south || -90,
-            east: bounds.east || 180,
-            west: bounds.west || -180
+            north: bounds.north ?? 90,
+            south: bounds.south ?? -90,
+            east: bounds.east ?? 180,
+            west: bounds.west ?? -180
         };
 
         return GridFactory.createScalarGrid(convertedData, gridBounds, dimensions);
@@ -80,19 +84,31 @@ class TemperatureProduct implements Product {
      * Convert temperature units if necessary
      */
     private convertTemperatureUnits(data: number[], metadata: any): number[] {
-        const units = metadata.units || metadata.variable_units || '';
-        
-        // If data is in Kelvin, convert to Celsius
-        if (units.toLowerCase().includes('kelvin') || units.toLowerCase().includes('k')) {
-            return data.map(temp => temp - 273.15);
+        const units = (metadata.units || metadata.variable_units || '').toLowerCase().trim();
+
+        // Explicit Kelvin units -> Celsius.
+        if (units === 'k' || units === 'kelvin' || units.includes('kelvin')) {
+            return data.map((temp) => temp - 273.15);
         }
-        
-        // If data is in Fahrenheit, convert to Celsius
-        if (units.toLowerCase().includes('fahrenheit') || units.toLowerCase().includes('f')) {
-            return data.map(temp => (temp - 32) * 5/9);
+
+        // Explicit Fahrenheit units -> Celsius.
+        if (units === 'f' || units === 'fahrenheit' || units.includes('fahrenheit')) {
+            return data.map((temp) => (temp - 32) * 5 / 9);
         }
-        
-        // Assume data is already in Celsius
+
+        // Explicit Celsius (or already Celsius): leave as-is.
+        if (units === 'c' || units === '°c' || units.includes('celsius')) {
+            return [...data];
+        }
+
+        // Unknown units: infer Kelvin by magnitude. Earth temperatures in Kelvin
+        // are ~180-340; in Celsius they are ~-90..60. A finite sample well above
+        // the plausible Celsius range is almost certainly Kelvin.
+        const sample = data.find((v) => Number.isFinite(v));
+        if (sample !== undefined && sample > 100) {
+            return data.map((temp) => temp - 273.15);
+        }
+
         return [...data];
     }
 
@@ -113,7 +129,9 @@ class TemperatureProduct implements Product {
             return false;
         }
 
-        const hasTemperature = !!(data.t2m || data.temperature || data.t || data.temp || data.d2m || data.dewpoint);
+        const hasTemperature = !!(
+            data[this.id] || data.t2m || data.temperature || data.t || data.temp || data.d2m || data.dewpoint
+        );
         return hasTemperature;
     }
 }

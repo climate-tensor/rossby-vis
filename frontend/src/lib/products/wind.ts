@@ -69,11 +69,13 @@ class WindProduct implements Product {
             height: shape[1] || shape[0]  // latitude dimension
         };
 
+        // Use ?? so legitimate zero bounds (e.g. west = 0 for 0-360 grids) are
+        // preserved rather than replaced by defaults.
         const gridBounds = {
-            north: bounds.north || 90,
-            south: bounds.south || -90,
-            east: bounds.east || 180,
-            west: bounds.west || -180
+            north: bounds.north ?? 90,
+            south: bounds.south ?? -90,
+            east: bounds.east ?? 180,
+            west: bounds.west ?? -180
         };
 
         return GridFactory.createVectorGrid(uData, vData, gridBounds, dimensions);

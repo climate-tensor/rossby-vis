@@ -429,7 +429,11 @@ export class FieldInterpolationWorker {
                     type: grid.type,
                     bounds: grid.bounds,
                     dimensions: grid.dimensions,
-                    resolution: grid.resolution
+                    resolution: grid.resolution,
+                    // Per-variable color scale descriptor (raw-unit). The worker
+                    // reconstructs the gradient so each field is colored on its
+                    // own physical range, matching the original earth.js.
+                    colorScale: grid.colorScale
                 };
 
                 if (grid.type === 'vector') {
@@ -445,7 +449,10 @@ export class FieldInterpolationWorker {
                     };
                 }
 
-                const { globe, grid } = config;
+                // `globe` and `grid` are already destructured at the top of this
+                // Promise executor. Re-declaring them here put `grid` in a
+                // temporal dead zone, so `grid.type` above threw
+                // "Cannot access 'grid' before initialization".
                 const orientation = globe.orientation(); // Get the globe's current rotation
 
                 this.worker.postMessage({

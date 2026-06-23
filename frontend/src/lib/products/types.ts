@@ -48,6 +48,15 @@ export interface Grid {
         deltaLon: number;
         deltaLat: number;
     };
+
+    /**
+     * Serializable description of the color scale to use when rendering this
+     * grid. Derived from the source variable's physical category so each field
+     * (temperature, pressure, wind, ...) is colored on its own raw-unit range,
+     * matching the original earth.js `getVariableScale`. Optional for backward
+     * compatibility; the renderer falls back to a sensible default when absent.
+     */
+    colorScale?: import('../color-scales').ColorScaleDescriptor;
 }
 
 /**

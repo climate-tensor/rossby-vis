@@ -56,6 +56,13 @@ export interface ParticleAnimationConfig {
     colorScale?: (speed: number) => string;
     /** Animation speed (requestAnimationFrame multiplier) */
     animationSpeed?: number;
+    /**
+     * Minimum milliseconds between simulation frames. The original earth.js ran
+     * at ~40ms/frame (~25fps) via setTimeout; rendering every requestAnimationFrame
+     * (~60fps) makes the flow ~2.4x too fast and less smooth. Frames that arrive
+     * sooner than this are skipped.
+     */
+    frameRate?: number;
 }
 
 /**
@@ -74,7 +81,8 @@ const DEFAULT_CONFIG: Required<ParticleAnimationConfig> = {
         const b = Math.floor((1 - intensity) * 255);
         return `rgb(${r},${g},${b})`;
     },
-    animationSpeed: 1.0
+    animationSpeed: 1.0,
+    frameRate: 40
 };
 
 /**
@@ -96,6 +104,7 @@ export class ParticleAnimator {
     private frameCount = 0;
     private lastFpsUpdate = 0;
     private fps = 0;
+    private lastFrameTime = 0;
 
     constructor(canvas: HTMLCanvasElement, config: ParticleAnimationConfig = {}) {
         this.canvas = canvas;
@@ -146,10 +155,38 @@ export class ParticleAnimator {
     }
 
     /**
-     * Set the field data for animation
+     * Set the field data for animation.
+     *
+     * @param field The new (screen-space) vector field, or null to clear.
+     * @param options.clearTrails When the field actually changes (e.g. the globe
+     *   was rotated), wipe the canvas so the previous orientation's accumulated
+     *   particle trails don't linger and mask the new flow. Particle positions
+     *   are kept so motion stays coherent (reseeding every frame would flicker).
      */
-    public setField(field: Field | null): void {
+    public setField(field: Field | null, options: { clearTrails?: boolean } = {}): void {
+        const changed = field !== this.field;
         this.field = field;
+
+        if (changed && options.clearTrails) {
+            this.clear();
+            this.buckets.clear();
+            this.lastFrameTime = 0; // Let the next rAF advance the simulation immediately.
+        }
+    }
+
+    /**
+     * Re-seed all particles at fresh random positions and clear the canvas.
+     *
+     * Particles live in screen space, so after the globe is rotated the existing
+     * particles keep their old positions and momentum and only adapt to the new
+     * field "in place" — which reads as inertia, as if the wind didn't rotate.
+     * Re-seeding lets the new orientation's flow structure repopulate cleanly.
+     */
+    public reseed(): void {
+        this.clear();
+        this.buckets.clear();
+        this.initializeParticles();
+        this.lastFrameTime = 0;
     }
 
     /**
@@ -161,6 +198,7 @@ export class ParticleAnimator {
         this.isRunning = true;
         this.lastFpsUpdate = performance.now();
         this.frameCount = 0;
+        this.lastFrameTime = 0; // Run the first simulation frame immediately.
         this.animate();
     }
 
@@ -179,8 +217,18 @@ export class ParticleAnimator {
      * Main animation loop
      * Reproduces the animate function from original earth.js
      */
-    private animate = (): void => {
+    private animate = (timestamp?: number): void => {
         if (!this.isRunning) return;
+
+        // Always keep the rAF loop alive, but throttle the actual simulation to
+        // the configured frame rate so the flow matches the original cadence.
+        this.animationId = requestAnimationFrame(this.animate);
+
+        const now = timestamp ?? performance.now();
+        if (now - this.lastFrameTime < this.config.frameRate) {
+            return;
+        }
+        this.lastFrameTime = now;
 
         // Performance tracking
         this.updatePerformanceMetrics();
@@ -195,9 +243,6 @@ export class ParticleAnimator {
             // Phase 2: Draw particles using bucketing optimization
             this.drawParticles();
         }
-
-        // Schedule next frame
-        this.animationId = requestAnimationFrame(this.animate);
     };
 
     /**
@@ -379,15 +424,31 @@ export function createParticleAnimator(
 }
 
 /**
- * Wind speed color scale (reproduces the color mapping from original)
+ * Grayscale particle palette, faithfully reproducing micro.js
+ * `windIntensityColorScale(step, maxWind)`: shades of gray stepping from 85 to
+ * 255. In the original earth.js the moving particles are drawn grayscale (the
+ * colored gradient is reserved for the scalar overlay), which reads as the
+ * delicate animated streamlines the original is known for.
+ */
+const INTENSITY_SCALE_STEP = 10;
+const WIND_INTENSITY_PALETTE: string[] = (() => {
+    const palette: string[] = [];
+    for (let j = 85; j <= 255; j += INTENSITY_SCALE_STEP) {
+        palette.push(`rgba(${j}, ${j}, ${j}, 1)`);
+    }
+    return palette;
+})();
+
+/**
+ * Wind particle color scale. Returns a shade of gray for the given particle
+ * speed, matching the original earth.js streamline rendering.
  */
 export function windSpeedColorScale(speed: number): string {
-    // Convert m/s to color using a realistic wind speed scale
-    const normalized = Math.min(speed / 20, 1); // 0-20 m/s range
-    
-    if (normalized < 0.1) return 'rgba(255,255,255,0.4)'; // Calm
-    if (normalized < 0.3) return 'rgb(128,255,128)'; // Light
-    if (normalized < 0.5) return 'rgb(255,255,128)'; // Moderate
-    if (normalized < 0.7) return 'rgb(255,128,128)'; // Strong
-    return 'rgb(255,64,64)'; // Very strong
+    // `speed` here is the magnitude of the per-frame screen displacement stored
+    // in the field vectors (already velocity-scaled in the worker), not raw m/s.
+    // Normalise against a representative fast-wind displacement so the grayscale
+    // palette spans the full calm->strong range.
+    const normalized = Math.min(speed / 8, 1);
+    const index = Math.floor(normalized * (WIND_INTENSITY_PALETTE.length - 1));
+    return WIND_INTENSITY_PALETTE[index];
 }

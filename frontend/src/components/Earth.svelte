@@ -16,7 +16,8 @@ import {
 } from '../lib/stores';
 import { Agent } from '../lib/control/agent';
 import { createGlobe, type Globe, type Viewport, type ProjectionType } from '../lib/globes';
-import { createProduct, type Grid } from '../lib/products';
+import { type Grid } from '../lib/products';
+import { loadProductGrid } from '../lib/products/product-data-loader';
 import { createSvgRenderer } from '../lib/renderers/svg-renderer';
 import { createFieldInterpolator, type Field, type InterpolationConfig } from '../lib/renderers/field-interpolator';
 import { createParticleAnimator, windSpeedColorScale, type ParticleAnimator } from '../lib/renderers/particle-animator';
@@ -36,9 +37,24 @@ let viewport: Viewport = {
     translate: [400, 300]
 };
 
-// Agents for async pipeline control (Phase 1.2 integration)
-let gridAgent: Agent<Grid, { productId: string }>;
-let fieldAgent: Agent<Field, { globe: Globe; grid: Grid }>;
+// Agents for async pipeline control (Phase 1.2 integration).
+// Base (scalar colour overlay) and overlay (vector wind particles) use separate
+// agents so that submitting one does not cancel the other's in-flight task.
+let baseGridAgent: Agent<Grid, { productId: string }>;
+let baseFieldAgent: Agent<Field, { globe: Globe; grid: Grid }>;
+let overlayGridAgent: Agent<Grid, { productId: string }>;
+let overlayFieldAgent: Agent<Field, { globe: Globe; grid: Grid }>;
+
+// Cached grids (raw data). Grid data depends only on the selected product/time,
+// NOT on the globe orientation, so rotation must re-interpolate these cached
+// grids rather than re-fetching from the backend.
+let baseGrid: Grid | null = null;
+let overlayGrid: Grid | null = null;
+
+// Persistent field interpolators (each owns a Web Worker). Reused across
+// rotations so we don't spawn a new worker on every render.
+let baseInterpolator: ReturnType<typeof createFieldInterpolator> | null = null;
+let overlayInterpolator: ReturnType<typeof createFieldInterpolator> | null = null;
 
 // Reactive state tracking
 let currentProjection: ProjectionType = 'orthographic';
@@ -70,18 +86,31 @@ function initializePipeline() {
         manipulator.on('moveStart', () => {
             svgRenderer?.setLowResolution(true);
         });
+        manipulator.on('move', () => {
+            // Re-interpolate the cached grids against the new orientation as the
+            // globe is dragged, so the data layer rotates WITH the coastlines and
+            // stays visible. Throttled to the interpolator's throughput; no
+            // backend re-fetch happens here.
+            scheduleRerender();
+        });
         manipulator.on('moveEnd', () => {
             svgRenderer?.setLowResolution(false);
+            // Re-seed the wind particles so the new orientation's flow repopulates
+            // cleanly instead of the old particles drifting on with inertia.
+            particleAnimator?.reseed();
+            // Final, full-resolution render at the resting orientation.
+            scheduleRerender();
         });
     }
 
     // Initialize particle animator (Phase 3.1)
     if (animationCanvas) {
         particleAnimator = createParticleAnimator(animationCanvas, {
-            particleCount: 2000,
+            particleCount: 3000,      // Denser flow for a finer look.
             colorScale: windSpeedColorScale,
-            speedMultiplier: 0.8,
-            fadeOpacity: 0.96
+            speedMultiplier: 0.6,     // Slower, more delicate motion.
+            fadeOpacity: 0.96,
+            frameRate: 40             // ~25fps, matching the original earth.js cadence.
         });
     }
 
@@ -115,15 +144,10 @@ function setupCanvasInteraction() {
         const x = event.clientX - rect.left;
         const y = event.clientY - rect.top;
         manipulator.move(x, y);
-        
-        // Trigger complete re-render during interaction (both geography and data)
-        renderGeography().catch(console.error);
-        
-        // Re-render data overlay if we have an active field
-        if (currentBaseProduct && globe) {
-            // Restart field processing with new globe orientation
-            restartRendering();
-        }
+        // Geography and data are redrawn together, in lockstep, by
+        // scheduleRerender (triggered via the manipulator 'move' event below).
+        // Drawing geography here too would let the coastlines run ahead of the
+        // throttled data layer and appear detached.
     };
 
     const handleMouseUp = () => {
@@ -160,32 +184,96 @@ async function renderGeography() {
 }
 
 /**
- * Load data product and trigger complete rendering pipeline
- * Phase 3.2: Complete pipeline integration
+ * Load the base layer (scalar colour overlay) and render it to the data canvas.
+ * Phase 3.2: Complete pipeline integration with real backend data.
  */
-async function loadDataProduct(productId: string): Promise<void> {
+async function loadBaseLayer(productId: string): Promise<void> {
     if (!productId || !globe) return;
-    
+
     isLoading.set(true);
-    
     try {
-        // Step 1: Load data using gridAgent (Phase 1.2 Agent pattern)
-        console.log('Loading data product:', productId);
-        const grid = await gridAgent.submit({ productId });
-        console.log('Data product loaded successfully');
-        
-        // Step 2: Process field using fieldAgent (Phase 2.3 & 3.1 integration)
-        console.log('Starting field interpolation...');
-        const field = await fieldAgent.submit({ globe, grid });
-        console.log('Field interpolation completed, animation started. Field bounds:', field.bounds);
-        
+        const grid = await baseGridAgent.submit({ productId });
+        baseGrid = grid; // Cache for re-interpolation on rotation.
+        await baseFieldAgent.submit({ globe, grid });
     } catch (error) {
-        console.error('Failed to load and process data product:', error);
-        // Stop animation on error
+        console.error(`Failed to load base layer "${productId}":`, error);
+    } finally {
+        isLoading.set(false);
+    }
+}
+
+/**
+ * Load the overlay layer. Vector products drive the particle animation; scalar
+ * overlays are drawn as a colour layer on the data canvas.
+ */
+async function loadOverlayLayer(productId: string): Promise<void> {
+    if (!productId || !globe) return;
+
+    isLoading.set(true);
+    try {
+        const grid = await overlayGridAgent.submit({ productId });
+        overlayGrid = grid; // Cache for re-interpolation on rotation.
+        await overlayFieldAgent.submit({ globe, grid });
+    } catch (error) {
+        console.error(`Failed to load overlay layer "${productId}":`, error);
         particleAnimator?.stop();
     } finally {
         isLoading.set(false);
     }
+}
+
+function logRerenderError(layer: string, error: any): void {
+    if (error?.message !== 'Task was cancelled') {
+        console.error(`Failed to re-render ${layer} layer:`, error);
+    }
+}
+
+/**
+ * Re-interpolate and redraw the currently cached grids against the globe's
+ * current orientation, WITHOUT re-fetching from the backend. Used after a
+ * rotation or projection change.
+ */
+async function rerenderData(): Promise<void> {
+    if (!globe) return;
+
+    const tasks: Promise<unknown>[] = [];
+    if (baseGrid) {
+        tasks.push(
+            baseFieldAgent.submit({ globe, grid: baseGrid }).catch((e) => logRerenderError('base', e))
+        );
+    }
+    if (overlayGrid) {
+        tasks.push(
+            overlayFieldAgent.submit({ globe, grid: overlayGrid }).catch((e) => logRerenderError('overlay', e))
+        );
+    }
+    await Promise.all(tasks);
+}
+
+// Throttle live re-rendering to the interpolator's throughput: while a render is
+// in flight, remember that another is needed and run exactly one more when it
+// finishes. This keeps the data layer following the globe during a drag without
+// piling up (and self-cancelling) tasks.
+let rerenderInFlight = false;
+let rerenderPending = false;
+
+function scheduleRerender(): void {
+    if (rerenderInFlight) {
+        rerenderPending = true;
+        return;
+    }
+    rerenderInFlight = true;
+    rerenderPending = false;
+    // Draw the coastlines for the SAME orientation snapshot the interpolation
+    // captures, so the SVG and data layers stay in lockstep instead of the
+    // coastlines running ahead of the throttled data layer.
+    renderGeography().catch(console.error);
+    rerenderData().finally(() => {
+        rerenderInFlight = false;
+        if (rerenderPending) {
+            scheduleRerender();
+        }
+    });
 }
 
 /**
@@ -211,10 +299,19 @@ function stopRendering(): void {
  */
 function restartRendering(): void {
     stopRendering();
-    
-    // Restart with current overlay product if available
+
+    // If we already have the grids cached (e.g. projection change), just
+    // re-interpolate them; otherwise fetch them fresh.
+    if (baseGrid || overlayGrid) {
+        rerenderData();
+        return;
+    }
+
+    if (currentBaseProduct) {
+        loadBaseLayer(currentBaseProduct).catch(console.error);
+    }
     if (currentOverlayProduct) {
-        loadDataProduct(currentOverlayProduct).catch(console.error);
+        loadOverlayLayer(currentOverlayProduct).catch(console.error);
     }
 }
 
@@ -268,14 +365,15 @@ $: if (isMounted && $projection !== currentProjection) {
     restartRendering();
 }
 
-$: if (isMounted && $activeBaseLayerId !== currentBaseProduct && gridAgent) {
+$: if (isMounted && $activeBaseLayerId !== currentBaseProduct && baseGridAgent) {
     currentBaseProduct = $activeBaseLayerId;
     console.log('Base layer changed to:', currentBaseProduct);
     
     if (currentBaseProduct) {
-        loadDataProduct(currentBaseProduct).catch(console.error);
+        loadBaseLayer(currentBaseProduct).catch(console.error);
     } else {
         // Clear data canvas if no base layer
+        baseGrid = null;
         if (dataCanvas) {
             const ctx = dataCanvas.getContext('2d');
             ctx?.clearRect(0, 0, dataCanvas.width, dataCanvas.height);
@@ -283,112 +381,70 @@ $: if (isMounted && $activeBaseLayerId !== currentBaseProduct && gridAgent) {
     }
 }
 
-$: if (isMounted && $activeOverlayLayerId !== currentOverlayProduct && gridAgent) {
+$: if (isMounted && $activeOverlayLayerId !== currentOverlayProduct && overlayGridAgent) {
     currentOverlayProduct = $activeOverlayLayerId;
     console.log('Overlay layer changed to:', currentOverlayProduct);
     
     if (currentOverlayProduct) {
-        loadDataProduct(currentOverlayProduct).catch(console.error);
+        loadOverlayLayer(currentOverlayProduct).catch(console.error);
     } else {
         // Stop animation if no overlay layer
+        overlayGrid = null;
         stopRendering();
     }
 }
 
+/**
+ * Interpolate a grid into a field and render it. Vector grids drive the particle
+ * animation; the colour overlay is drawn onto the data canvas for both kinds.
+ */
+async function interpolateAndRender(
+    interpolator: ReturnType<typeof createFieldInterpolator>,
+    { globe, grid }: { globe: Globe; grid: Grid },
+    drawOverlay: boolean
+): Promise<Field> {
+    const config: InterpolationConfig = { globe, grid };
+    const field = await interpolator.interpolate(config);
+
+    if (drawOverlay && dataCanvas && field.overlay) {
+        const ctx = dataCanvas.getContext('2d');
+        ctx?.putImageData(field.overlay, 0, 0);
+    }
+
+    // Only vector fields produce a usable vector field for particle animation.
+    // Clear stale trails so the wind visibly responds when the globe is rotated
+    // (the field is replaced for the new orientation).
+    if (grid.type === 'vector' && particleAnimator && field.bounds.valid) {
+        particleAnimator.setField(field, { clearTrails: true });
+        particleAnimator.start();
+    }
+
+    return field;
+}
+
 // Component lifecycle
 onMount(() => {
-    // Initialize agents (Phase 1.2 implementation)
-    gridAgent = new Agent<Grid, { productId: string }>({
-        task: async ({ productId }: { productId: string }) => {
-            const product = createProduct(productId);
-            if (!product) {
-                throw new Error(`Unknown product: ${productId}`);
-            }
-            
-            // Generate appropriate mock data based on product type
-            const dataSize = 181 * 360;
-            let mockDataFields: any = {};
-            
-            // Determine data fields based on product type
-            if (product.type === 'vector') {
-                // Wind products need u and v components
-                mockDataFields = {
-                    u: new Array(dataSize).fill(0).map(() => Math.random() * 20 - 10),
-                    v: new Array(dataSize).fill(0).map(() => Math.random() * 20 - 10)
-                };
-            } else if (product.type === 'scalar') {
-                // Temperature products need temperature field
-                if (productId === 't2m') {
-                    mockDataFields = {
-                        t2m: new Array(dataSize).fill(0).map(() => Math.random() * 60 - 20) // -20 to 40°C
-                    };
-                } else if (productId === 'd2m') {
-                    mockDataFields = {
-                        d2m: new Array(dataSize).fill(0).map(() => Math.random() * 50 - 30) // -30 to 20°C
-                    };
-                } else if (productId === 'sst') {
-                    mockDataFields = {
-                        sst: new Array(dataSize).fill(0).map(() => Math.random() * 35 + 2) // 2 to 37°C
-                    };
-                } else if (productId.startsWith('temp-')) {
-                    mockDataFields = {
-                        t: new Array(dataSize).fill(0).map(() => Math.random() * 100 - 70) // -70 to 30°C
-                    };
-                } else {
-                    // Generic temperature field
-                    mockDataFields = {
-                        temperature: new Array(dataSize).fill(0).map(() => Math.random() * 40 - 10)
-                    };
-                }
-            }
-            
-            const mockData = {
-                metadata: {
-                    shape: [1, 181, 360],
-                    bounds: { north: 90, south: -90, east: 180, west: -180 },
-                    units: product.units || 'unknown'
-                },
-                data: mockDataFields
-            };
-            
-            return await product.buildGrid(mockData);
-        }
+    // Grid agents fetch and build real data via the product data loader.
+    const buildGridTask = async ({ productId }: { productId: string }) => loadProductGrid(productId);
+
+    baseGridAgent = new Agent<Grid, { productId: string }>({ task: buildGridTask });
+    overlayGridAgent = new Agent<Grid, { productId: string }>({ task: buildGridTask });
+
+    // Persistent interpolators (one Web Worker each), reused across rotations.
+    baseInterpolator = createFieldInterpolator();
+    overlayInterpolator = createFieldInterpolator();
+
+    // Base field draws the scalar colour overlay onto the data canvas.
+    baseFieldAgent = new Agent<Field, { globe: Globe; grid: Grid }>({
+        task: (input) => interpolateAndRender(baseInterpolator!, input, true)
     });
-    
-    fieldAgent = new Agent<Field, { globe: Globe; grid: Grid }>({
-        task: async ({ globe, grid }: { globe: Globe; grid: Grid }) => {
-            // Phase 2.3 implementation: Use field interpolator
-            const fieldInterpolator = createFieldInterpolator();
-            
-            const config: InterpolationConfig = {
-                globe,
-                grid,
-                onProgress: (progress, message) => {
-                    console.log(`Field interpolation: ${progress}% - ${message}`);
-                }
-            };
-            
-            const field = await fieldInterpolator.interpolate(config);
-            
-            // Render the overlay to the data canvas
-            if (dataCanvas && field.overlay) {
-                const ctx = dataCanvas.getContext('2d');
-                if (ctx) {
-                    ctx.putImageData(field.overlay, 0, 0);
-                }
-            }
-            
-            // Phase 3.1: Start particle animation with computed field
-            if (particleAnimator && field.bounds.valid) {
-                particleAnimator.setField(field);
-                particleAnimator.start();
-                console.log('Particle animation started with', particleAnimator.getParticleCount(), 'particles');
-            }
-            
-            return field;
-        }
+
+    // Overlay field drives the particle animation (and draws colour only for
+    // scalar overlays, which would otherwise leave nothing visible).
+    overlayFieldAgent = new Agent<Field, { globe: Globe; grid: Grid }>({
+        task: (input) => interpolateAndRender(overlayInterpolator!, input, input.grid.type === 'scalar')
     });
-    
+
     // Initialize rendering pipeline
     initializePipeline();
     
@@ -400,10 +456,10 @@ onMount(() => {
     (async () => {
         const initialLoadPromises = [];
         if ($activeBaseLayerId) {
-            initialLoadPromises.push(loadDataProduct($activeBaseLayerId));
+            initialLoadPromises.push(loadBaseLayer($activeBaseLayerId));
         }
         if ($activeOverlayLayerId) {
-            initialLoadPromises.push(loadDataProduct($activeOverlayLayerId));
+            initialLoadPromises.push(loadOverlayLayer($activeOverlayLayerId));
         }
         await Promise.all(initialLoadPromises.map(p => p.catch(e => console.error("Initial load failed:", e))));
 
@@ -413,14 +469,20 @@ onMount(() => {
     
     return () => {
         window.removeEventListener('resize', updateViewport);
-        gridAgent?.cancel();
-        fieldAgent?.cancel();
+        baseGridAgent?.cancel();
+        baseFieldAgent?.cancel();
+        overlayGridAgent?.cancel();
+        overlayFieldAgent?.cancel();
     };
 });
 
 onDestroy(() => {
-    gridAgent?.cancel();
-    fieldAgent?.cancel();
+    baseGridAgent?.cancel();
+    baseFieldAgent?.cancel();
+    overlayGridAgent?.cancel();
+    overlayFieldAgent?.cancel();
+    baseInterpolator?.terminate();
+    overlayInterpolator?.terminate();
     particleAnimator?.destroy();
 });
 </script>

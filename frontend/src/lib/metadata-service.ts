@@ -316,7 +316,8 @@ export function generateMetadataLayers(
         description: string,
         category: 'atmospheric' | 'oceanic' | 'surface',
         role: 'base' | 'overlay',
-        isVector: boolean = false
+        isVector: boolean = false,
+        vectorPair?: VectorPair
     ): MetadataDataLayer => {
         const varMeta = variables[varName];
         const units = varMeta?.units || '';
@@ -331,7 +332,8 @@ export function generateMetadataLayers(
             role,
             category,
             metadata: varMeta,
-            isVector
+            isVector,
+            vectorPair
         };
     };
 
@@ -354,12 +356,24 @@ export function generateMetadataLayers(
     // Define overlay layers: Wind components and other available variables
     // First, add Wind overlay for 10m wind if u10/v10 exist
     if (variables['u10'] && variables['v10']) {
-        layers.push(createLayer('u10', 'Wind 10m', '10 metre wind components', 'atmospheric', 'overlay', true));
+        layers.push(
+            createLayer('u10', 'Wind 10m', '10 metre wind components', 'atmospheric', 'overlay', true, {
+                u: 'u10',
+                v: 'v10',
+                level: '10'
+            })
+        );
     }
 
     // Add Wind overlay for 100m wind if u100/v100 exist
     if (variables['u100'] && variables['v100']) {
-        layers.push(createLayer('u100', 'Wind 100m', '100 metre wind components', 'atmospheric', 'overlay', true));
+        layers.push(
+            createLayer('u100', 'Wind 100m', '100 metre wind components', 'atmospheric', 'overlay', true, {
+                u: 'u100',
+                v: 'v100',
+                level: '100'
+            })
+        );
     }
 
     // Add SST if available
@@ -518,6 +532,42 @@ export class MetadataService {
         }));
         
         console.log('MetadataService: Selected level:', level);
+    }
+
+    /**
+     * Switch the active physical mode (atmosphere / ocean / surface) and
+     * recompute the variable categorization and available data layers for the
+     * new mode. No-op until metadata has been loaded.
+     *
+     * @param mode The physical mode to activate.
+     */
+    setMode(mode: PhysicalMode): void {
+        metadataState.update(state => {
+            if (!state.metadata || !state.modeInfo) {
+                return state;
+            }
+
+            const newModeInfo: ModeDetectionResult = { ...state.modeInfo, mode };
+            const categorizedVariables = categorizeVariables(
+                state.metadata.variables,
+                mode,
+                newModeInfo
+            );
+            const availableLayers = generateMetadataLayers(
+                state.metadata,
+                categorizedVariables,
+                mode
+            );
+
+            return {
+                ...state,
+                modeInfo: newModeInfo,
+                categorizedVariables,
+                availableLayers
+            };
+        });
+
+        console.log('MetadataService: Mode set to', mode);
     }
 }
 

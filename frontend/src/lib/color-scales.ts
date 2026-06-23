@@ -188,6 +188,154 @@ export function oceanCurrentsColorScale(): (speed: number) => string {
 }
 
 /**
+ * Serializable description of a color scale, used to ship per-variable scales
+ * across the worker boundary (functions cannot be `postMessage`d). The worker
+ * reconstructs the concrete gradient via {@link buildGradientFromDescriptor}.
+ *
+ * Each variant operates on the variable's *raw* data units (Kelvin, Pascals,
+ * etc.), faithfully reproducing the gradients in the original `products.js`.
+ */
+export type ColorScaleDescriptor =
+    /** A segmented gradient over `[value, [r,g,b]]` stops (raw units). */
+    | { kind: 'segmented'; segments: [number, number[]][] }
+    /** Sinebow over `(clamp(v - lo, 0, span) / span)` (e.g. dew point). */
+    | { kind: 'sinebowShift'; lo: number; span: number }
+    /** Sinebow over `min(abs(v), max)` (generic default). */
+    | { kind: 'sinebowAbs'; max: number }
+    /** Extended sinebow over `min(v, max) / max` (wind speed). */
+    | { kind: 'extendedSinebow'; max: number };
+
+/**
+ * Variable-name → physical category rules, ported verbatim from micro.js
+ * `categoryRules`. Order matters: the first matching rule wins.
+ */
+const CATEGORY_RULES: [string, RegExp][] = [
+    ['Geopotential Height', /^z\d*$/],
+    ['Temperature', /(^t\d*$)|temp|t2m|sst/],
+    ['Humidity', /(^q\d*$)|humidity|dewpoint|d2m|rh/],
+    ['Wind', /(^[uv]\d*$)|wind|gust/],
+    ['Pressure', /pressure|sp|msl|slp/],
+    ['Precipitation', /precipitation|rain|snow|tp|sd/],
+    ['Radiation', /radiation|solar|tisr/]
+];
+
+/**
+ * Determine the physical category of a variable from its name, reproducing
+ * micro.js `getVariableQuantity`. Returns `"General"` when nothing matches.
+ */
+export function getVariableQuantity(variable: string): string {
+    const name = (variable || '').toLowerCase();
+    for (const [category, regex] of CATEGORY_RULES) {
+        if (regex.test(name)) {
+            return category;
+        }
+    }
+    return 'General';
+}
+
+/**
+ * Return the serializable color-scale descriptor for a variable, reproducing
+ * the per-category gradients from `products.js` `getVariableScale`. All bounds
+ * are in the variable's raw data units so the gradient is applied to
+ * unconverted values (matching the original earth.js behaviour).
+ */
+export function getColorScaleDescriptor(variable: string): ColorScaleDescriptor {
+    switch (getVariableQuantity(variable)) {
+        case 'Temperature':
+            return {
+                kind: 'segmented',
+                segments: [
+                    [240, [37, 4, 42]],
+                    [250, [41, 10, 130]],
+                    [260, [70, 215, 215]],
+                    [273.15, [21, 84, 187]],
+                    [280, [24, 132, 14]],
+                    [290, [247, 251, 59]],
+                    [300, [235, 167, 21]],
+                    [320, [88, 27, 67]]
+                ]
+            };
+        case 'Geopotential Height':
+            return {
+                kind: 'segmented',
+                segments: [
+                    [100, [41, 10, 130]],
+                    [5100, [70, 215, 215]],
+                    [10100, [24, 132, 14]],
+                    [15100, [247, 251, 59]],
+                    [20100, [235, 167, 21]]
+                ]
+            };
+        case 'Pressure':
+            return {
+                kind: 'segmented',
+                segments: [
+                    [90000, [40, 0, 0]],
+                    [95000, [187, 60, 31]],
+                    [98000, [16, 1, 43]],
+                    [101300, [241, 254, 18]],
+                    [105000, [255, 255, 255]]
+                ]
+            };
+        case 'Humidity':
+            return { kind: 'sinebowShift', lo: 200, span: 100 };
+        case 'Precipitation':
+            return {
+                kind: 'segmented',
+                segments: [
+                    [0, [135, 206, 235]],
+                    [0.002, [70, 130, 180]],
+                    [0.005, [25, 25, 112]],
+                    [0.01, [0, 0, 139]]
+                ]
+            };
+        case 'Radiation':
+            return {
+                kind: 'segmented',
+                segments: [
+                    [0, [25, 25, 112]],
+                    [1000000, [255, 215, 0]],
+                    [3000000, [255, 140, 0]],
+                    [5000000, [255, 69, 0]]
+                ]
+            };
+        case 'Wind':
+            return { kind: 'extendedSinebow', max: 100 };
+        default:
+            return { kind: 'sinebowAbs', max: 1 };
+    }
+}
+
+/**
+ * Reconstruct a concrete `(value, alpha) -> [r,g,b,a]` gradient from a
+ * {@link ColorScaleDescriptor}. Shared so the main thread and worker render
+ * colors identically.
+ */
+export function buildGradientFromDescriptor(
+    descriptor: ColorScaleDescriptor
+): (value: number, alpha: number) => number[] {
+    switch (descriptor.kind) {
+        case 'segmented': {
+            const scale = segmentedColorScale(descriptor.segments);
+            return (value, alpha) => scale(value, alpha);
+        }
+        case 'sinebowShift': {
+            const { lo, span } = descriptor;
+            return (value, alpha) =>
+                sinebowColor(clamp(value - lo, 0, span) / span, alpha);
+        }
+        case 'sinebowAbs': {
+            const { max } = descriptor;
+            return (value, alpha) => sinebowColor(Math.min(Math.abs(value), max), alpha);
+        }
+        case 'extendedSinebow': {
+            const { max } = descriptor;
+            return (value, alpha) => extendedSinebowColor(Math.min(value, max) / max, alpha);
+        }
+    }
+}
+
+/**
  * Get appropriate color scale function for variable type
  */
 export function getColorScaleForVariable(variable: string): (value: number) => string {

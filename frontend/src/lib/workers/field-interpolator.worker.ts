@@ -7,6 +7,12 @@
  * all necessary fixes for projection, longitude, and distortion correction.
  */
 
+import {
+    buildGradientFromDescriptor,
+    getColorScaleDescriptor,
+    type ColorScaleDescriptor
+} from '../color-scales';
+
 // region: Type Definitions
 interface WorkerRequest {
     id: string;
@@ -33,41 +39,22 @@ interface WorkerResponse {
 // endregion
 
 // region: Color and Math Utilities
-function colorInterpolator(start: number[], end: number[]) {
-    const r = start[0], g = start[1], b = start[2];
-    const Δr = end[0] - r, Δg = end[1] - g, Δb = end[2] - b;
-    return (i: number, a: number) => [Math.floor(r + i * Δr), Math.floor(g + i * Δg), Math.floor(b + i * Δb), a];
-}
+// Default gradients used only when a grid arrives without a color-scale
+// descriptor (older callers / safety net). These mirror the per-variable scales
+// from the original products.js: wind speed in m/s and 2m temperature in K.
+const defaultScalarScale = buildGradientFromDescriptor(getColorScaleDescriptor('t2m'));
+const defaultVectorScale = buildGradientFromDescriptor(getColorScaleDescriptor('wind'));
 
-function proportion(x: number, low: number, high: number) {
-    return Math.max(0, Math.min(1, (x - low) / (high - low)));
-}
-
-function segmentedColorScale(segments: [number, number[]][]) {
-    const points: number[] = [], interpolators: any[] = [], ranges: [number, number][] = [];
-    for (let i = 0; i < segments.length - 1; i++) {
-        points.push(segments[i + 1][0]);
-        interpolators.push(colorInterpolator(segments[i][1], segments[i + 1][1]));
-        ranges.push([segments[i][0], segments[i + 1][0]]);
-    }
-    return (point: number, alpha: number) => {
-        let i;
-        for (i = 0; i < points.length - 1; i++) {
-            if (point <= points[i]) break;
-        }
-        return interpolators[i](proportion(point, ranges[i][0], ranges[i][1]), alpha);
-    };
-}
-
-const tempScale = segmentedColorScale([
-    [-50, [37, 4, 42]], [-30, [41, 10, 130]], [-10, [70, 215, 215]], [0, [21, 84, 187]],
-    [10, [24, 132, 14]], [20, [247, 251, 59]], [30, [235, 167, 21]], [50, [88, 27, 67]]
-]);
-
-const windScale = segmentedColorScale([
-    [0, [255, 255, 255]], [5, [130, 180, 255]], [10, [70, 215, 215]], [15, [24, 132, 14]],
-    [20, [247, 251, 59]], [25, [235, 167, 21]], [30, [255, 0, 0]], [40, [150, 0, 150]]
-]);
+/**
+ * Per-frame particle velocity scale.
+ *
+ * Distortion correction returns vectors stretched by the projection scale
+ * (≈ `scale * π/180` per unit wind), which is far too large to use directly as a
+ * per-frame pixel displacement — particles would teleport across the globe. This
+ * constant converts the corrected wind into a sane on-screen step (a few pixels
+ * per frame for typical winds) while preserving direction and relative speed.
+ */
+const PARTICLE_VELOCITY_SCALE = 0.08;
 // endregion
 
 // region: Core Logic (Interpolation, Distortion)
@@ -80,13 +67,28 @@ function bilinearInterpolate(grid: any, lon: number, lat: number): [number, numb
     const deltaLon = (east - west) / (width - 1);
     const deltaLat = (north - south) / (height - 1);
 
-    const i = (lon - west) / deltaLon;
+    // A global grid whose columns span the full 360° wraps at the prime meridian.
+    // Reproduce nullschool's technique (products.js buildGrid): treat the first
+    // column as the column just past the last so interpolation across the seam is
+    // seamless, instead of returning null and leaving a black gap near lon 0/360.
+    const isContinuous = (east - west) + deltaLon >= 360 - deltaLon * 0.5;
+
+    // Longitude index. For continuous grids wrap into [0, width) (floorMod);
+    // otherwise the request must fall inside the grid.
+    let i = (lon - west) / deltaLon;
+    if (isContinuous) {
+        i = ((i % width) + width) % width;
+    } else if (i < 0 || i > width - 1) {
+        return null;
+    }
+
     const j = (north - lat) / deltaLat;
+    if (j < 0 || j > height - 1) return null;
 
-    if (i < 0 || i >= width - 1 || j < 0 || j >= height - 1) return null;
-
-    const x0 = Math.floor(i), x1 = x0 + 1;
-    const y0 = Math.floor(j), y1 = y0 + 1;
+    const x0 = Math.floor(i);
+    const x1 = isContinuous ? (x0 + 1) % width : Math.min(x0 + 1, width - 1);
+    const y0 = Math.floor(j);
+    const y1 = Math.min(y0 + 1, height - 1);
     const fx = i - x0, fy = j - y0;
     const get = (arr: Float32Array, x: number, y: number) => arr[y * width + x];
 
@@ -108,32 +110,52 @@ function bilinearInterpolate(grid: any, lon: number, lat: number): [number, numb
     }
 }
 
-function calculateDistortion(project: (c: [number, number]) => [number, number] | null, λ: number, φ: number, x: number, y: number) {
-    const h = 0.0001; // Small increment for finite difference
-    const pλ = project([λ + h, φ]);
-    const pφ = project([λ, φ + h]);
+// Finite-difference step (in degrees) for the distortion estimate. Matches
+// nullschool's micro.js (0.0000360° ~= 4 m).
+const DISTORTION_H = 0.0000360;
 
-    if (!pλ || !pφ) return { scaleX: 1, scaleY: 1, angle: 0 };
+/**
+ * Projection distortion at (λ, φ) as scaled partial derivatives
+ * `[dx/dλ, dy/dλ, dx/dφ, dy/dφ]`. Faithfully reproduces nullschool's
+ * `micro.distortion` so wind vectors stay correct at the poles:
+ *   - the finite-difference step points toward the equator (`hφ = φ < 0 ? +H : -H`)
+ *     so it never steps past ±90° latitude at the poles, and
+ *   - the longitude derivatives are divided by the meridian scale factor
+ *     `k = cos(φ)` (Snyder eq. 4-3); without this there is a pinching/blow-up
+ *     effect where the meridians converge at the poles.
+ */
+function calculateDistortion(
+    project: (c: [number, number]) => [number, number],
+    λ: number,
+    φ: number,
+    x: number,
+    y: number
+): [number, number, number, number] {
+    const hλ = λ < 0 ? DISTORTION_H : -DISTORTION_H;
+    const hφ = φ < 0 ? DISTORTION_H : -DISTORTION_H;
+    const pλ = project([λ + hλ, φ]);
+    const pφ = project([λ, φ + hφ]);
+    const k = Math.cos((φ * Math.PI) / 180);
 
-    const del_x_λ = (pλ[0] - x) / h;
-    const del_y_λ = (pλ[1] - y) / h;
-    const del_x_φ = (pφ[0] - x) / h;
-    const del_y_φ = (pφ[1] - y) / h;
-
-    const angle = Math.atan2(del_y_λ, del_x_λ);
-
-    return {
-        scaleX: Math.sqrt(del_x_λ * del_x_λ + del_y_λ * del_y_λ),
-        scaleY: Math.sqrt(del_x_φ * del_x_φ + del_y_φ * del_y_φ),
-        angle
-    };
+    return [
+        (pλ[0] - x) / hλ / k,
+        (pλ[1] - y) / hλ / k,
+        (pφ[0] - x) / hφ,
+        (pφ[1] - y) / hφ
+    ];
 }
 
-function applyDistortionCorrection(u: number, v: number, distortion: any) {
-    const { scaleX, scaleY, angle } = distortion;
-    const scaledU = u * scaleX, scaledV = v * scaleY;
-    const cos = Math.cos(angle), sin = Math.sin(angle);
-    return [scaledU * cos - scaledV * sin, scaledU * sin + scaledV * cos];
+/**
+ * Transform a geographic wind vector (u, v) into a screen-space vector via the
+ * projection Jacobian (nullschool's `distort`): the columns are the longitude
+ * and latitude derivatives from {@link calculateDistortion}.
+ */
+function applyDistortionCorrection(
+    u: number,
+    v: number,
+    d: [number, number, number, number]
+): [number, number] {
+    return [d[0] * u + d[2] * v, d[1] * u + d[3] * v];
 }
 // endregion
 
@@ -146,7 +168,11 @@ async function performInterpolation(request: WorkerRequest): Promise<void> {
     postMessage({ id, type: 'progress', progress: { percentage: 0, message: 'Initializing...' } });
 
     const { scale, translate, orientation } = projectionConfig;
-    const λ0 = orientation.lambda * Math.PI / 180;
+    // The SVG layer uses d3.geoOrthographic with rotate([λ, -φ, γ]) (see
+    // OrthographicGlobe.setOrientation), and d3 centers the map at longitude -λ.
+    // This hand-written projection must mirror that, otherwise the data layer's
+    // longitude is flipped relative to the coastlines once the globe is rotated.
+    const λ0 = -orientation.lambda * Math.PI / 180;
     const φ0 = orientation.phi * Math.PI / 180;
     const cosφ0 = Math.cos(φ0), sinφ0 = Math.sin(φ0);
 
@@ -169,6 +195,17 @@ async function performInterpolation(request: WorkerRequest): Promise<void> {
         return [λ * 180 / Math.PI, φ * 180 / Math.PI];
     };
 
+    // Reconstruct the per-variable gradient from the descriptor attached to the
+    // grid (see product-data-loader). Falls back to the category default if a
+    // caller didn't supply one. Colors are applied to RAW data values so each
+    // field uses its true physical range (matching the original earth.js).
+    const descriptor: ColorScaleDescriptor | undefined = gridData.colorScale;
+    const gradient = descriptor
+        ? buildGradientFromDescriptor(descriptor)
+        : gridData.type === 'vector'
+            ? defaultVectorScale
+            : defaultScalarScale;
+
     const vectors = new Float32Array(width * height * 2);
     const overlay = new Uint8ClampedArray(width * height * 4);
 
@@ -187,11 +224,18 @@ async function performInterpolation(request: WorkerRequest): Promise<void> {
                         const [rawU, rawV] = value as [number, number];
                         const distortion = calculateDistortion(projection, lon, lat, x, y);
                         const [u, v] = applyDistortionCorrection(rawU, rawV, distortion);
-                        vectors[i * 2] = u;
-                        vectors[i * 2 + 1] = v;
-                        [r, g, b, a] = windScale(Math.sqrt(u * u + v * v), 180);
+                        // Store screen-space displacement (px/frame) for particle motion.
+                        // At the exact pole the meridian scale factor is 0, so guard
+                        // against the resulting non-finite vector (leave it at 0).
+                        if (Number.isFinite(u) && Number.isFinite(v)) {
+                            vectors[i * 2] = u * PARTICLE_VELOCITY_SCALE;
+                            vectors[i * 2 + 1] = v * PARTICLE_VELOCITY_SCALE;
+                        }
+                        // Colour by the true wind speed (m/s), not the projection-
+                        // stretched screen vector, so the scale isn't saturated.
+                        [r, g, b, a] = gradient(Math.sqrt(rawU * rawU + rawV * rawV), 180);
                     } else {
-                        [r, g, b, a] = tempScale(value as number, 200);
+                        [r, g, b, a] = gradient(value as number, 200);
                     }
                     overlay[i * 4] = r;
                     overlay[i * 4 + 1] = g;
