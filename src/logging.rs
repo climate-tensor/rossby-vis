@@ -49,10 +49,7 @@ pub struct LoggingConfig {
     pub enable_request_tracing: bool,
     /// Enable system metrics logging
     pub enable_metrics: bool,
-    /// Enable distributed tracing (Jaeger)
-    pub enable_distributed_tracing: bool,
-    /// Jaeger endpoint for distributed tracing
-    pub jaeger_endpoint: Option<String>,
+
     /// Application name for tracing
     pub service_name: String,
     /// Environment name (development, staging, production)
@@ -66,8 +63,6 @@ impl Default for LoggingConfig {
             format: LogFormat::Text,
             enable_request_tracing: true,
             enable_metrics: true,
-            enable_distributed_tracing: false,
-            jaeger_endpoint: None,
             service_name: "rossby-vis".to_string(),
             environment: "development".to_string(),
         }
@@ -101,17 +96,6 @@ impl LoggingConfig {
         // System metrics from ENABLE_METRICS
         if let Ok(enable) = std::env::var("ENABLE_METRICS") {
             config.enable_metrics = enable.parse().unwrap_or(true);
-        }
-
-        // Distributed tracing from ENABLE_DISTRIBUTED_TRACING
-        if let Ok(enable) = std::env::var("ENABLE_DISTRIBUTED_TRACING") {
-            config.enable_distributed_tracing = enable.parse().unwrap_or(false);
-        }
-
-        // Jaeger endpoint from JAEGER_ENDPOINT
-        if let Ok(endpoint) = std::env::var("JAEGER_ENDPOINT") {
-            config.jaeger_endpoint = Some(endpoint);
-            config.enable_distributed_tracing = true; // Auto-enable if endpoint is provided
         }
 
         // Service name from SERVICE_NAME
@@ -164,30 +148,7 @@ pub fn init_logging(config: LoggingConfig) -> Result<(), Box<dyn std::error::Err
             .boxed(),
     };
 
-    #[cfg(feature = "distributed-tracing")]
-    let mut layers = vec![logging_layer];
-    #[cfg(not(feature = "distributed-tracing"))]
     let layers = vec![logging_layer];
-
-    // Add distributed tracing layer if enabled
-    #[cfg(feature = "distributed-tracing")]
-    if config.enable_distributed_tracing {
-        if let Some(endpoint) = &config.jaeger_endpoint {
-            match setup_jaeger_tracing(&config.service_name, endpoint) {
-                Ok(tracer) => {
-                    let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-                    layers.push(telemetry_layer.boxed());
-                    info!(
-                        "Distributed tracing enabled with Jaeger endpoint: {}",
-                        endpoint
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to setup Jaeger tracing: {}", e);
-                }
-            }
-        }
-    }
 
     // Initialize the subscriber with all layers
     registry.with(layers).init();
@@ -200,7 +161,6 @@ pub fn init_logging(config: LoggingConfig) -> Result<(), Box<dyn std::error::Err
     info!("Log format: {:?}", config.format);
     info!("Request tracing: {}", config.enable_request_tracing);
     info!("System metrics: {}", config.enable_metrics);
-    info!("Distributed tracing: {}", config.enable_distributed_tracing);
 
     // Start metrics collection if enabled
     if config.enable_metrics {
@@ -210,18 +170,6 @@ pub fn init_logging(config: LoggingConfig) -> Result<(), Box<dyn std::error::Err
     }
 
     Ok(())
-}
-
-/// Setup Jaeger distributed tracing
-#[cfg(feature = "distributed-tracing")]
-fn setup_jaeger_tracing(
-    service_name: &str,
-    endpoint: &str,
-) -> Result<opentelemetry::sdk::trace::Tracer, opentelemetry::trace::TraceError> {
-    opentelemetry_jaeger::new_agent_pipeline()
-        .with_service_name(service_name)
-        .with_endpoint(endpoint)
-        .install_simple()
 }
 
 /// Collect and log system metrics periodically
@@ -364,7 +312,6 @@ mod tests {
         assert!(matches!(config.format, LogFormat::Text));
         assert!(config.enable_request_tracing);
         assert!(config.enable_metrics);
-        assert!(!config.enable_distributed_tracing);
     }
 
     #[test]

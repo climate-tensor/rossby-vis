@@ -76,8 +76,6 @@ async fn test_logging_initialization() {
         format: LogFormat::Text,
         enable_request_tracing: true,
         enable_metrics: false, // Disable metrics to avoid spawning background task
-        enable_distributed_tracing: false,
-        jaeger_endpoint: None,
         service_name: "test-service".to_string(),
         environment: "test".to_string(),
     };

@@ -42,10 +42,6 @@ struct Args {
     /// Service name for logging and tracing
     #[arg(long, default_value = "rossby-vis")]
     service_name: String,
-
-    /// Jaeger endpoint for distributed tracing
-    #[arg(long)]
-    jaeger_endpoint: Option<String>,
 }
 
 #[tokio::main]
@@ -65,11 +61,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     if let Ok(format) = args.log_format.parse::<LogFormat>() {
         logging_config.format = format;
-    }
-
-    if let Some(endpoint) = args.jaeger_endpoint {
-        logging_config.jaeger_endpoint = Some(endpoint);
-        logging_config.enable_distributed_tracing = true;
     }
 
     // Initialize comprehensive logging system
