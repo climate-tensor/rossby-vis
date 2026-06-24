@@ -286,35 +286,35 @@ fn map_variable_category(variable: &str) -> &str {
 - Earth frontend renders correctly from embedded assets
 - Configurable port via CLI arguments
 
-### Phase 2: Streaming Data Proxy
-**Status**: Next Phase
+### Phase 2: Streaming Data Proxy ✅
+**Status**: Implemented for proxy streaming and unified `/data` access
 
 **Objectives**: Efficient large dataset handling through streaming architecture with unified API support
 
 **Key Components**:
-- HTTP client with streaming support (`reqwest`)
-- Unified proxy routes: `/proxy/data?vars={variables}&time={timestamp}&format=json`
-- Chunked transfer encoding implementation
-- Multi-variable format conversion during streaming
-- Real-time Rossby JSON → Earth format translation
+- ✅ HTTP client with streaming support (`reqwest`)
+- ✅ Unified proxy routes: `/proxy/data?vars={variables}&time={timestamp}&format=json`
+- ✅ Chunked transfer encoding implementation for `/proxy/data`
+- ✅ Multi-variable request forwarding for coordinated fields such as `u10,v10`
+- ⚠️ Earth-compatible JSON conversion is implemented through compatibility handlers and the Svelte data loader, not as an in-stream converter inside `/proxy/data`
 
 **Technical Requirements**:
-- Memory-efficient processing of multi-gigabyte responses
-- Support for Rossby's unified `/data` endpoint with multiple variables
-- Real-time format conversion (Rossby unified JSON → Earth format)
-- Coordinated multi-variable requests (e.g., u10,v10 for wind visualization)
-- Error handling for network failures and data corruption
-- Configurable backend server URL via `--api-url` parameter
+- ✅ Memory-efficient processing of large responses via streaming proxy bodies
+- ✅ Support for Rossby's unified `/data` endpoint with multiple variables
+- ⚠️ Real-time Rossby unified JSON → Earth format conversion is only partially represented by dynamic Earth-compatible routes; `/proxy/data` remains a streaming JSON pass-through
+- ✅ Coordinated multi-variable requests (e.g., u10,v10 for wind visualization)
+- ✅ Error handling for network failures and backend errors
+- ✅ Configurable backend server URL via `--api-url` parameter
 
 **Acceptance Criteria**:
-- Low memory footprint during large dataset transfers
-- Chunked transfer encoding visible in browser network inspection
-- Successful multi-variable data visualization from Rossby backend
-- Single requests efficiently handle related variables (wind u/v components)
-- Robust error handling and recovery for proxy operations
+- ✅ Low memory footprint during large dataset transfers through `bytes_stream()`
+- ✅ Chunked transfer encoding visible on `/proxy/data`
+- ✅ Multi-variable data can be requested from Rossby and consumed by the frontend data loader
+- ✅ Single requests efficiently handle related variables (wind u/v components)
+- ✅ Robust error handling and recovery for proxy operations
 
-### Phase 3: UI Migration to Metadata-Driven Architecture
-**Status**: Planning Phase
+### Phase 3: UI Migration to Metadata-Driven Architecture 🚧
+**Status**: In progress; Phase 3a complete, Phase 3b partially implemented, Phase 3c started
 
 **Objectives**: Transform hardcoded UI components to dynamically adapt based on Rossby server metadata
 
@@ -359,51 +359,55 @@ function generateOverlayControls(variables) {
 - Event binding resilience with retry mechanisms
 
 #### Phase 3b: Metadata-Driven Controls Implementation ⏳
+**Status**: IN PROGRESS
+
 **Objectives**: Replace all hardcoded UI elements with metadata-driven equivalents
 
 **Key Components**:
-- **Date Controls**: Use actual time range from metadata.coordinates.time
-- **Data Layer Display**: Show actual data source from metadata
-- **Height Selection**: Dynamic level generation (surface, pressure levels, height levels)
-- **Overlay Generation**: Variable-based overlay creation with proper categorization
-- **Source Information**: Extract and display actual data source information
+- ✅ **Date Controls (data model)**: Actual time range is extracted from `metadata.coordinates.time`
+- ✅ **Data Layer Display**: Base and overlay layer selectors are populated from metadata-derived stores when metadata is available
+- ⚠️ **Height Selection**: Level detection exists, but the visible control path is only partially wired into active layer state
+- ✅ **Overlay Generation**: Variable-based overlay generation exists for known scalar variables and wind vector pairs
+- ✅ **Source Information**: Data source display is derived from metadata layers with fallback values
 
 **Technical Requirements**:
-- Variable mapping system (short names → display names → visualization types)
-- Level detection and categorization (pressure, height, surface)
-- Time range extraction and navigation control updates
-- Smart defaults and configuration persistence
+- ✅ Variable mapping system (short names → display names → visualization types)
+- ✅ Level detection and categorization (pressure, height, surface)
+- ⚠️ Time range extraction exists, but full user-facing time navigation controls are not complete
+- ⚠️ Smart defaults and configuration persistence are partially implemented through stores and URL synchronization
 
 **Acceptance Criteria**:
-- All UI controls reflect server metadata capabilities
-- Date navigation uses actual available time points
-- Height controls show only available levels from data
-- Overlay controls generated from server variables
-- Source information extracted from metadata
+- ⚠️ Most data layer controls reflect server metadata capabilities; some controls still use fallback/static assumptions
+- ⚠️ Date navigation state uses actual available time points, but the complete playback/slider UI is not finished
+- ⚠️ Height controls can be derived from metadata, but end-to-end level selection remains partial
+- ✅ Overlay controls generated from server variables
+- ✅ Source information extracted from metadata
 
 #### Phase 3c: Enhanced Variable Discovery ⏳
+**Status**: STARTED
+
 **Objectives**: Advanced features for metadata-driven visualization
 
 **Key Components**:
-- Automatic variable categorization (scalar vs vector)
-- Smart overlay grouping (temperature, wind, pressure)
-- Multi-variable relationship detection (u/v wind components)
-- Enhanced visualization type selection
-- Configuration validation against metadata
+- ✅ Automatic variable categorization (scalar vs vector) has initial implementation
+- ⚠️ Smart overlay grouping exists for common ERA5-like variables but is still partly hardcoded
+- ✅ Multi-variable relationship detection for u/v wind components has initial implementation
+- ⚠️ Enhanced visualization type selection is partially implemented through products and color scale descriptors
+- ⚠️ Configuration validation against metadata is partial
 
 **Technical Requirements**:
-- Variable analysis engine for automatic categorization
-- Relationship detection between related variables
-- Intelligent default selection based on available data
-- Enhanced error handling for missing variables
-- Dynamic visualization adaptation
+- ✅ Variable analysis engine for automatic categorization
+- ✅ Relationship detection between related variables
+- ⚠️ Intelligent default selection based on available data is partial
+- ✅ Enhanced error handling for missing variables in the data loader path
+- ⚠️ Dynamic visualization adaptation is active for common scalar/vector paths, but not yet fully generic
 
 **Acceptance Criteria**:
-- System automatically detects wind vector components
-- Related variables grouped intelligently in UI
-- Appropriate default selections based on available data
-- Robust error handling for metadata inconsistencies
-- Enhanced user experience with smart suggestions
+- ✅ System automatically detects wind vector components
+- ⚠️ Related variables are grouped for known patterns; generic grouping still needs refinement
+- ⚠️ Appropriate default selections based on available data are partial
+- ✅ Robust error handling exists for missing/unresolvable products and backend failures
+- ⚠️ Enhanced user experience with smart suggestions is not complete
 
 ### Phase 4: Advanced Features (Future)
 - Performance optimization and caching strategies

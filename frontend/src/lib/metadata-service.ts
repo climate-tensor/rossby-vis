@@ -45,6 +45,7 @@ export const metadataState: Writable<MetadataUIState> = writable({
 function detectWindPairs(variables: string[]): VectorPair[] {
     const pairs: VectorPair[] = [];
     const windPatterns = [
+        { u: /^u$/, v: /^v$/ },                  // Pressure-level wind
         { u: /^u(\d+)$/, v: /^v(\d+)$/ },        // u10/v10, u100/v100
         { u: /^u(\d+)hPa$/, v: /^v(\d+)hPa$/ },  // u850hPa/v850hPa
         { u: /^uas$/, v: /^vas$/ },              // Surface wind (CMIP naming)
@@ -300,27 +301,123 @@ export function setupTimeNavigation(metadata: NetCDFMetadata): TimeNavigationInf
 // Data Layer Generation Functions
 // =================================================================
 
+type LayerCategory = 'atmospheric' | 'oceanic' | 'surface';
+type LayerRole = 'base' | 'overlay';
+
+interface Era5LayerRule {
+    name: string;
+    desc: string;
+    category: LayerCategory;
+    role: LayerRole;
+}
+
+const ERA5_LAYER_RULES: Record<string, Era5LayerRule> = {
+    t2m: { name: '2m Temperature', desc: '2 metre temperature', category: 'atmospheric', role: 'base' },
+    d2m: { name: '2m Dewpoint Temperature', desc: '2 metre dewpoint temperature', category: 'atmospheric', role: 'base' },
+    sst: { name: 'Sea Surface Temperature', desc: 'Sea surface temperature', category: 'oceanic', role: 'base' },
+    q: { name: 'Specific Humidity', desc: 'Specific humidity', category: 'atmospheric', role: 'base' },
+    r: { name: 'Relative Humidity', desc: 'Relative humidity', category: 'atmospheric', role: 'base' },
+    tcwv: { name: 'Total Column Water Vapour', desc: 'Total column vertically-integrated water vapour', category: 'atmospheric', role: 'base' },
+    sp: { name: 'Surface Pressure', desc: 'Surface air pressure', category: 'atmospheric', role: 'base' },
+    msl: { name: 'Mean Sea Level Pressure', desc: 'Mean sea level pressure', category: 'atmospheric', role: 'overlay' },
+    tcc: { name: 'Total Cloud Cover', desc: 'Total cloud cover', category: 'atmospheric', role: 'base' },
+    hcc: { name: 'High Cloud Cover', desc: 'High cloud cover', category: 'atmospheric', role: 'base' },
+    mcc: { name: 'Medium Cloud Cover', desc: 'Medium cloud cover', category: 'atmospheric', role: 'base' },
+    lcc: { name: 'Low Cloud Cover', desc: 'Low cloud cover', category: 'atmospheric', role: 'base' },
+    siconc: { name: 'Sea Ice Concentration', desc: 'Sea ice area fraction', category: 'oceanic', role: 'base' },
+    sd: { name: 'Snow Depth', desc: 'Snow depth water equivalent', category: 'surface', role: 'base' },
+    tp: { name: 'Total Precipitation', desc: 'Total precipitation', category: 'surface', role: 'base' },
+    cp: { name: 'Convective Precipitation', desc: 'Convective precipitation', category: 'surface', role: 'base' },
+    lsp: { name: 'Large-Scale Precipitation', desc: 'Large-scale precipitation', category: 'surface', role: 'base' },
+    sro: { name: 'Surface Runoff', desc: 'Surface runoff', category: 'surface', role: 'base' },
+    ssro: { name: 'Sub-Surface Runoff', desc: 'Sub-surface runoff', category: 'surface', role: 'base' },
+    swvl1: { name: 'Soil Water Layer 1', desc: 'Volumetric soil water layer 1', category: 'surface', role: 'base' },
+    swvl2: { name: 'Soil Water Layer 2', desc: 'Volumetric soil water layer 2', category: 'surface', role: 'base' },
+    swvl3: { name: 'Soil Water Layer 3', desc: 'Volumetric soil water layer 3', category: 'surface', role: 'base' },
+    swvl4: { name: 'Soil Water Layer 4', desc: 'Volumetric soil water layer 4', category: 'surface', role: 'base' },
+    pev: { name: 'Potential Evaporation', desc: 'Potential evaporation', category: 'surface', role: 'base' },
+    swh: { name: 'Significant Wave Height', desc: 'Significant height of combined wind waves and swell', category: 'oceanic', role: 'base' },
+    tisr: { name: 'TOA Solar Radiation', desc: 'TOA incident solar radiation', category: 'atmospheric', role: 'base' },
+    ssrd: { name: 'Surface Solar Radiation Downwards', desc: 'Surface short-wave solar radiation downwards', category: 'surface', role: 'base' },
+    fdir: { name: 'Direct Solar Radiation', desc: 'Total sky direct solar radiation at surface', category: 'surface', role: 'base' },
+    ttr: { name: 'Top Thermal Radiation', desc: 'Top net long-wave thermal radiation', category: 'atmospheric', role: 'base' },
+    z: { name: 'Geopotential Height', desc: 'Geopotential height', category: 'atmospheric', role: 'overlay' },
+    blh: { name: 'Boundary Layer Height', desc: 'Boundary layer height', category: 'atmospheric', role: 'overlay' },
+    cbh: { name: 'Cloud Base Height', desc: 'Cloud base height', category: 'atmospheric', role: 'overlay' },
+    i10fg: { name: '10m Wind Gust', desc: 'Instantaneous 10 metre wind gust', category: 'atmospheric', role: 'overlay' }
+};
+
+const COORDINATE_VARIABLES = new Set(['latitude', 'longitude', 'lat', 'lon', 'time', 'level', 'plev', 'height']);
+
+function variableAttributes(varMeta: VariableMetadata | undefined): Record<string, any> {
+    return ((varMeta as any)?.attributes ?? {}) as Record<string, any>;
+}
+
+function variableUnits(varMeta: VariableMetadata | undefined): string {
+    return varMeta?.units ?? variableAttributes(varMeta).units ?? '';
+}
+
+function variableLongName(varName: string, varMeta: VariableMetadata | undefined): string {
+    return varMeta?.long_name ?? variableAttributes(varMeta).long_name ?? varName;
+}
+
+function fallbackCategory(varName: string, longName: string): LayerCategory {
+    const text = `${varName} ${longName}`.toLowerCase();
+    if (text.includes('sea') || text.includes('ocean') || text.includes('wave') || text.includes('ice')) {
+        return 'oceanic';
+    }
+    if (
+        text.includes('snow') ||
+        text.includes('soil') ||
+        text.includes('runoff') ||
+        text.includes('precip') ||
+        text.includes('evaporation') ||
+        text.includes('surface')
+    ) {
+        return 'surface';
+    }
+    return 'atmospheric';
+}
+
+function fallbackRole(varName: string, longName: string): LayerRole {
+    const text = `${varName} ${longName}`.toLowerCase();
+    if (
+        text.includes('wind') ||
+        text.includes('gust') ||
+        text.includes('geopotential') ||
+        text.includes('height') ||
+        text.includes('pressure')
+    ) {
+        return 'overlay';
+    }
+    return 'base';
+}
+
 export function generateMetadataLayers(
     metadata: NetCDFMetadata,
     categorizedVars: CategorizedVariables,
     mode: PhysicalMode
 ): MetadataDataLayer[] {
+    void categorizedVars;
+    void mode;
+
     const layers: MetadataDataLayer[] = [];
     const variables = metadata.variables || {};
     const globalSource = metadata.global_attributes?.source || 'ERA5/ECMWF';
+    const addedVariables = new Set<string>();
 
     // Helper function to create a layer from a variable
     const createLayer = (
         varName: string,
         displayName: string,
         description: string,
-        category: 'atmospheric' | 'oceanic' | 'surface',
-        role: 'base' | 'overlay',
+        category: LayerCategory,
+        role: LayerRole,
         isVector: boolean = false,
         vectorPair?: VectorPair
     ): MetadataDataLayer => {
         const varMeta = variables[varName];
-        const units = varMeta?.units || '';
+        const units = variableUnits(varMeta);
 
         return {
             id: varName,
@@ -337,80 +434,60 @@ export function generateMetadataLayers(
         };
     };
 
-    // Define specific base layers as requested: 'sd', 'sp', 'd2m', 't2m', 'tisr'
-    const baseLayers = [
-        { var: 'sd', name: 'Snow Depth', desc: 'Snow depth water equivalent', category: 'surface' as const },
-        { var: 'sp', name: 'Surface Pressure', desc: 'Surface air pressure', category: 'atmospheric' as const },
-        { var: 'd2m', name: '2m Dewpoint Temperature', desc: '2 metre dewpoint temperature', category: 'atmospheric' as const },
-        { var: 't2m', name: '2m Temperature', desc: '2 metre temperature', category: 'atmospheric' as const },
-        { var: 'tisr', name: 'Solar Radiation', desc: 'TOA incident solar radiation', category: 'atmospheric' as const }
-    ];
-
-    // Add base layers if they exist in the metadata
-    baseLayers.forEach(layer => {
-        if (variables[layer.var]) {
-            layers.push(createLayer(layer.var, layer.name, layer.desc, layer.category, 'base'));
+    const addLayer = (
+        varName: string,
+        rule: Era5LayerRule,
+        isVector: boolean = false,
+        vectorPair?: VectorPair
+    ): void => {
+        if (!variables[varName] || addedVariables.has(varName)) {
+            return;
         }
+        layers.push(createLayer(varName, rule.name, rule.desc, rule.category, rule.role, isVector, vectorPair));
+        addedVariables.add(varName);
+    };
+
+    const variableNames = Object.keys(variables);
+    const vectorPairs = [...detectWindPairs(variableNames), ...detectOceanPairs(variableNames)];
+    const vectorComponents = new Set(vectorPairs.flatMap((pair) => [pair.u, pair.v]));
+
+    Object.entries(ERA5_LAYER_RULES)
+        .filter(([, rule]) => rule.role === 'base')
+        .forEach(([varName, rule]) => addLayer(varName, rule));
+
+    vectorPairs.forEach((pair) => {
+        const levelLabel = pair.level ? `${pair.level}m` : '';
+        const isOcean = pair.u.startsWith('uo') || pair.u.includes('current') || pair.u === 'ust';
+        const rule: Era5LayerRule = {
+            name: isOcean ? 'Ocean Current' : `Wind ${levelLabel}`.trim(),
+            desc: `${pair.u}/${pair.v} vector components`,
+            category: isOcean ? 'oceanic' : 'atmospheric',
+            role: 'overlay'
+        };
+        addLayer(pair.u, rule, true, pair);
     });
 
-    // Define overlay layers: Wind components and other available variables
-    // First, add Wind overlay for 10m wind if u10/v10 exist
-    if (variables['u10'] && variables['v10']) {
-        layers.push(
-            createLayer('u10', 'Wind 10m', '10 metre wind components', 'atmospheric', 'overlay', true, {
-                u: 'u10',
-                v: 'v10',
-                level: '10'
-            })
-        );
-    }
+    Object.entries(ERA5_LAYER_RULES)
+        .filter(([, rule]) => rule.role === 'overlay')
+        .forEach(([varName, rule]) => addLayer(varName, rule));
 
-    // Add Wind overlay for 100m wind if u100/v100 exist
-    if (variables['u100'] && variables['v100']) {
-        layers.push(
-            createLayer('u100', 'Wind 100m', '100 metre wind components', 'atmospheric', 'overlay', true, {
-                u: 'u100',
-                v: 'v100',
-                level: '100'
-            })
-        );
-    }
-
-    // Add SST if available
-    if (variables['sst']) {
-        layers.push(createLayer('sst', 'Sea Surface Temperature', 'Sea surface temperature', 'oceanic', 'overlay'));
-    }
-
-    // Add any other non-coordinate, non-wind-component variables as overlays
-    Object.keys(variables).forEach(varName => {
-        // Skip coordinate variables
-        if (['latitude', 'longitude', 'time', 'level', 'plev', 'height'].includes(varName.toLowerCase())) {
+    variableNames.forEach(varName => {
+        if (COORDINATE_VARIABLES.has(varName.toLowerCase())) {
+            return;
+        }
+        if (addedVariables.has(varName) || vectorComponents.has(varName)) {
             return;
         }
 
-        // Skip if already added as base or overlay
-        if (layers.some(layer => layer.variable === varName)) {
-            return;
-        }
-
-        // Skip wind components (we handle them as vector pairs above)
-        if (['u10', 'v10', 'u100', 'v100'].includes(varName)) {
-            return;
-        }
-
-        // Add remaining variables as overlays
         const varMeta = variables[varName];
-        const longName = varMeta?.long_name || varName;
-        let category: 'atmospheric' | 'oceanic' | 'surface' = 'atmospheric';
-        
-        // Simple categorization for remaining variables
-        if (varName.includes('sst') || varName.includes('ocean')) {
-            category = 'oceanic';
-        } else if (varName.includes('precip') || varName.includes('snow') || varName.includes('surface')) {
-            category = 'surface';
-        }
-
-        layers.push(createLayer(varName, longName, `${longName} from NetCDF data`, category, 'overlay'));
+        const longName = variableLongName(varName, varMeta);
+        const rule: Era5LayerRule = {
+            name: longName,
+            desc: `${longName} from NetCDF data`,
+            category: fallbackCategory(varName, longName),
+            role: fallbackRole(varName, longName)
+        };
+        addLayer(varName, rule);
     });
 
     return layers;
